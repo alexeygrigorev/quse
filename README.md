@@ -24,3 +24,17 @@ Supported providers:
 `gemini` is accepted and reports `unsupported` because it does not currently
 expose a usage endpoint.
 
+## Release
+
+Releases are published by GitHub Actions when a tag starting with `v` is pushed:
+
+```bash
+git tag v0.0.3
+git push origin main --tags
+```
+
+The workflow verifies that the tag version matches `pyproject.toml`, runs the
+tests, builds the wheel and sdist, then publishes to PyPI with trusted
+publishing. Configure PyPI trusted publishing for the GitHub repository,
+workflow `.github/workflows/release.yml`, and environment `pypi` before pushing
+the first release tag.
