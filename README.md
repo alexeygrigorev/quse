@@ -34,7 +34,5 @@ git push origin main --tags
 ```
 
 The workflow verifies that the tag version matches `pyproject.toml`, runs the
-tests, builds the wheel and sdist, then publishes to PyPI with trusted
-publishing. Configure PyPI trusted publishing for the GitHub repository,
-workflow `.github/workflows/release.yml`, and environment `pypi` before pushing
-the first release tag.
+tests, builds the wheel and sdist, then publishes to PyPI with the repository
+secret `PYPI_API_TOKEN`.
