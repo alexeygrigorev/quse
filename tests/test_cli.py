@@ -25,7 +25,8 @@ def test_usage_single_provider_json(monkeypatch):
     record = json.loads(result.stdout)
     assert record["provider"] == "codex"
     assert record["status"] == "ok"
-    assert record["remaining"] == 75.0
+    assert record["short_term"] == {"percent_remaining": 100.0, "reset_at": None}
+    assert record["long_term"] == {"percent_remaining": 75.0, "reset_at": "2026-05-01T00:00:00Z"}
 
 
 def test_usage_unknown_provider_exits_non_zero():
@@ -41,5 +42,26 @@ def test_zai_usage_handles_missing_limit_values(monkeypatch):
 
     record = normalize_usage_provider("zai")
 
-    assert record["used"] is None
-    assert record["remaining"] is None
+    assert record["short_term"] == {"percent_remaining": 100.0, "reset_at": None}
+    assert record["long_term"] == {"percent_remaining": 100.0, "reset_at": None}
+
+
+def test_human_usage_line_uses_normalized_windows(monkeypatch):
+    monkeypatch.setattr(
+        "quse.check_codex_quota",
+        lambda: CodexQuotaStatus(
+            secondary_window=CodexQuotaWindow(
+                used_percent=25,
+                reset_at="2026-05-01",
+            )
+        ),
+    )
+    monkeypatch.setattr("quse.codex_quota_block_reason", lambda: None)
+
+    result = CliRunner().invoke(app, ["codex"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == (
+        "codex: status=ok short_term=100.0% short_reset=unknown "
+        "long_term=75.0% long_reset=2026-05-01T00:00:00Z"
+    )
