@@ -131,29 +131,49 @@ def test_copilot_quota_block_reason_is_fail_open() -> None:
 
 
 def test_zai_fetch_usage_parses_limits(monkeypatch) -> None:
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "limits": [
-                        {"type": "TIME_LIMIT", "percentage": 81, "window_hours": 1, "remaining": 2, "limit": 10},
-                        {"type": "TOKENS_LIMIT", "percentage": 50, "window_hours": 24, "remaining": 500, "limit": 1000},
-                    ]
-                }
-            ),
-            stderr="",
-        ),
+    status = zai_quota._parse_usage_response(
+        {
+            "data": {
+                "limits": [
+                    {
+                        "type": "TIME_LIMIT",
+                        "percentage": 81,
+                        "unit": 1,
+                        "remaining": 2,
+                        "usage": 10,
+                    },
+                    {
+                        "type": "TOKENS_LIMIT",
+                        "percentage": 50,
+                        "unit": 24,
+                        "remaining": 500,
+                        "usage": 1000,
+                        "nextResetTime": 1770000000000,
+                    },
+                ]
+            }
+        }
     )
 
-    status = zai_quota._fetch_usage()
-
     assert status.limit_reached is False
-    assert status.short_term.percent_remaining == 50.0
-    assert status.long_term.percent_remaining == 100.0
+    assert status.short_term.percent_remaining == 19.0
+    assert status.short_term.reset_at is None
+    assert status.long_term.percent_remaining == 50.0
+    assert status.long_term.reset_at == "2026-02-02T02:40:00Z"
+
+
+def test_zai_reads_goz_config_shape(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"zai_token": "token-123", "zai_base_url": "https://api.z.ai/api/anthropic", "timeout": 9}),
+        encoding="utf-8",
+    )
+
+    config = zai_quota._read_zai_config(config_path)
+
+    assert config.token == "token-123"
+    assert config.base_url == "https://api.z.ai/api/anthropic"
+    assert config.timeout == 9.0
 
 
 def test_zai_check_quota_caches_fetch_result() -> None:

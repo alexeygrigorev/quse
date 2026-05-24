@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, TypeAlias
@@ -39,6 +40,38 @@ def _format_reset_at(value: str | None) -> str:
     except ValueError:
         return value
     return parsed.astimezone().strftime("%d-%m-%Y %H:%M (%Z)")
+
+
+def _format_window_hours(value: Any) -> str | None:
+    if isinstance(value, int):
+        return f"rolling {value}h"
+    return None
+
+
+def _zai_rolling_window(record: dict[str, Any], term: str) -> str | None:
+    if record["provider"] != "zai":
+        return None
+    windows = record["details"].get("windows")
+    if not isinstance(windows, dict):
+        return None
+    window_key = "tokens"
+    if term == "short_term":
+        window_key = "api_calls"
+    window = windows.get(window_key)
+    if not isinstance(window, dict):
+        return None
+    return _format_window_hours(window.get("window_hours"))
+
+
+def _format_reset_or_window(record: dict[str, Any], term: str) -> str:
+    window = record[term]
+    reset_at = _format_reset_at(window["reset_at"])
+    if reset_at != "unknown":
+        return reset_at
+    rolling_window = _zai_rolling_window(record, term)
+    if rolling_window is not None:
+        return rolling_window
+    return reset_at
 
 
 def _format_percent(value: float | int | None) -> str:
@@ -249,10 +282,10 @@ def format_usage_line(record: dict[str, Any]) -> str:
         f"    status: {record['status']}",
         "    short_term:",
         f"        usage: {short_usage}%",
-        f"        reset: {_format_reset_at(short_term['reset_at'])}",
+        f"        reset: {_format_reset_or_window(record, 'short_term')}",
         "    long_term:",
         f"        usage: {long_usage}%",
-        f"        reset: {_format_reset_at(long_term['reset_at'])}",
+        f"        reset: {_format_reset_or_window(record, 'long_term')}",
     ]
     if record["block_reason"]:
         lines.append(f"    block_reason: {record['block_reason']}")
@@ -273,4 +306,8 @@ def selected_providers(provider: str | None) -> list[str]:
 
 
 def collect_usage(provider: str | None = None) -> list[dict[str, Any]]:
-    return [normalize_usage_provider(name) for name in selected_providers(provider)]
+    providers = selected_providers(provider)
+    if provider is not None:
+        return [normalize_usage_provider(providers[0])]
+    with ThreadPoolExecutor(max_workers=len(providers)) as executor:
+        return list(executor.map(normalize_usage_provider, providers))

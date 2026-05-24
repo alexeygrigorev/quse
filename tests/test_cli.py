@@ -6,7 +6,8 @@ from click.testing import CliRunner
 
 from quse.cli import app
 from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow
-from quse.usage import normalize_usage_provider
+from quse.usage import collect_usage, format_usage_line, normalize_usage_provider
+from quse.zai_quota import ZaiQuotaStatus, ZaiQuotaWindow
 
 
 def test_usage_single_provider_json(monkeypatch):
@@ -50,6 +51,49 @@ def test_zai_usage_handles_missing_limit_values(monkeypatch):
 
     assert record["short_term"] == {"percent_remaining": 100.0, "reset_at": None}
     assert record["long_term"] == {"percent_remaining": 100.0, "reset_at": None}
+
+
+def test_zai_human_usage_shows_rolling_windows(monkeypatch):
+    monkeypatch.setattr(
+        "quse.usage.check_zai_quota",
+        lambda: ZaiQuotaStatus(
+            api_calls=ZaiQuotaWindow(used_percent=0, window_hours=5),
+            tokens=ZaiQuotaWindow(used_percent=0, window_hours=3),
+        ),
+    )
+    monkeypatch.setattr("quse.usage.zai_quota_block_reason", lambda: None)
+
+    record = normalize_usage_provider("zai")
+
+    assert format_usage_line(record) == (
+        "zai:\n"
+        "    status: ok\n"
+        "    short_term:\n"
+        "        usage: 100.0%\n"
+        "        reset: rolling 5h\n"
+        "    long_term:\n"
+        "        usage: 100.0%\n"
+        "        reset: rolling 3h"
+    )
+
+
+def test_collect_usage_without_provider_runs_checks_in_parallel(monkeypatch):
+    calls: list[str] = []
+
+    def fake_normalize(provider: str) -> dict:
+        calls.append(provider)
+        time.sleep(0.1)
+        return {"provider": provider}
+
+    monkeypatch.setattr("quse.usage.normalize_usage_provider", fake_normalize)
+
+    started_at = time.monotonic()
+    records = collect_usage()
+    elapsed = time.monotonic() - started_at
+
+    assert sorted(calls) == ["claude", "codex", "copilot", "zai"]
+    assert records == [{"provider": "codex"}, {"provider": "claude"}, {"provider": "copilot"}, {"provider": "zai"}]
+    assert elapsed < 0.25
 
 
 def test_human_usage_line_uses_normalized_windows(monkeypatch):
