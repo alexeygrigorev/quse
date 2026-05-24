@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import click
 
 from quse.usage import UnknownProviderError, collect_usage, format_usage_line
+
+
+def _json_usage_payload(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    payload: dict[str, dict[str, Any]] = {}
+    for record in records:
+        provider_record = dict(record)
+        provider = provider_record.pop("provider")
+        payload[provider] = provider_record
+    return payload
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -22,11 +32,7 @@ def usage_command(
         raise click.ClickException(str(exc)) from exc
 
     if json_output:
-        if len(records) == 1:
-            click.echo(json.dumps(records[0], sort_keys=True))
-        else:
-            for record in records:
-                click.echo(json.dumps(record, sort_keys=True))
+        click.echo(json.dumps(_json_usage_payload(records), indent=2, sort_keys=True))
         return 0
 
     for record in records:

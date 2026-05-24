@@ -12,10 +12,25 @@ quse copilot --json
 ```
 
 The CLI prints one normalized line per provider by default. `--json` emits the
-same normalized record shape as JSON:
+same normalized records as JSON keyed by provider name:
 
 ```json
-{"provider":"claude","status":"ok","short_term":{"percent_remaining":55.0,"reset_at":"2026-05-24T14:30:00Z"},"long_term":{"percent_remaining":87.0,"reset_at":"2026-05-28T14:59:59Z"}}
+{
+  "claude": {
+    "block_reason": null,
+    "details": {},
+    "error": null,
+    "long_term": {
+      "percent_remaining": 87.0,
+      "reset_at": "2026-05-28T14:59:59Z"
+    },
+    "short_term": {
+      "percent_remaining": 55.0,
+      "reset_at": "2026-05-24T14:30:00Z"
+    },
+    "status": "ok"
+  }
+}
 ```
 
 Supported providers:

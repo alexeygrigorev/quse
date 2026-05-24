@@ -30,10 +30,28 @@ def test_usage_single_provider_json(monkeypatch):
 
     assert result.exit_code == 0
     record = json.loads(result.stdout)
-    assert record["provider"] == "codex"
-    assert record["status"] == "ok"
-    assert record["short_term"] == {"percent_remaining": 60.0, "reset_at": "2026-04-30T00:00:00Z"}
-    assert record["long_term"] == {"percent_remaining": 75.0, "reset_at": "2026-05-01T00:00:00Z"}
+    assert set(record) == {"codex"}
+    assert record["codex"]["status"] == "ok"
+    assert record["codex"]["short_term"] == {"percent_remaining": 60.0, "reset_at": "2026-04-30T00:00:00Z"}
+    assert record["codex"]["long_term"] == {"percent_remaining": 75.0, "reset_at": "2026-05-01T00:00:00Z"}
+    assert result.stdout.startswith("{\n  ")
+
+
+def test_usage_all_providers_json_is_keyed_by_provider(monkeypatch):
+    records = [
+        {"provider": "codex", "status": "ok", "error": None},
+        {"provider": "claude", "status": "ok", "error": None},
+    ]
+    monkeypatch.setattr("quse.cli.collect_usage", lambda provider: records)
+
+    result = CliRunner().invoke(app, ["--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "claude": {"error": None, "status": "ok"},
+        "codex": {"error": None, "status": "ok"},
+    }
+    assert result.stdout.startswith("{\n  ")
 
 
 def test_usage_unknown_provider_exits_non_zero():
