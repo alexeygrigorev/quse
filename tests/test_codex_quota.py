@@ -73,7 +73,8 @@ def _make_api_response(
 def test_parse_limit_not_reached():
     status = _parse_quota_response(_make_api_response(limit_reached=False))
     assert status.limit_reached is False
-    assert status.short_term.percent_remaining == 100.0
+    assert status.short_term.percent_remaining == 50.0
+    assert status.short_term.reset_at == "2026-04-08T05:00:00Z"
     assert status.long_term.percent_remaining == 80.0
     assert status.long_term.reset_at == "2026-04-13T00:00:00Z"
 
@@ -88,6 +89,18 @@ def test_parse_empty_response():
     assert status.limit_reached is False
     assert status.short_term.percent_remaining == 100.0
     assert status.long_term.percent_remaining == 100.0
+
+
+def test_parse_unix_reset_timestamps():
+    status = _parse_quota_response(
+        _make_api_response(
+            primary_reset=1779637981,
+            secondary_reset=1780173234,
+        )
+    )
+
+    assert status.short_term.reset_at == "2026-05-24T15:53:01Z"
+    assert status.long_term.reset_at == "2026-05-30T20:33:54Z"
 
 
 # --- Quota check with caching ---

@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_SECONDS = 60
 
 
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    return None
+
+
 @dataclass(slots=True)
 class CopilotQuotaStatus:
     premium_remaining: int | None = None
@@ -74,8 +80,8 @@ def _fetch_quota(*, timeout: float = 10.0) -> CopilotQuotaStatus:
         return CopilotQuotaStatus(checked_at=time.monotonic())
 
     return CopilotQuotaStatus(
-        premium_remaining=premium.get("remaining") if isinstance(premium.get("remaining"), int) else None,
-        premium_entitlement=premium.get("entitlement") if isinstance(premium.get("entitlement"), int) else None,
+        premium_remaining=_int_or_none(premium.get("remaining")),
+        premium_entitlement=_int_or_none(premium.get("entitlement")),
         premium_percent_remaining=max(0.0, float(premium.get("percent_remaining", 100.0))),
         quota_reset_date=data.get("quota_reset_date"),
         checked_at=time.monotonic(),
@@ -92,7 +98,9 @@ def check_copilot_quota(
     if _cached_status is not None and time.monotonic() - _cached_status.checked_at < cache_ttl:
         return _cached_status
 
-    fetcher = _fetch if callable(_fetch) else _fetch_quota
+    fetcher = _fetch_quota
+    if callable(_fetch):
+        fetcher = _fetch
     _cached_status = fetcher()
     return _cached_status
 

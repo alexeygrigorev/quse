@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_SECONDS = 60
 
 
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    return None
+
+
 @dataclass(slots=True)
 class ZaiQuotaWindow:
     used_percent: float = 0.0
@@ -80,9 +86,9 @@ def _fetch_usage(*, timeout: float = 10.0) -> ZaiQuotaStatus:
             continue
         window = ZaiQuotaWindow(
             used_percent=limit.get("percentage", 0),
-            window_hours=limit.get("window_hours") if isinstance(limit.get("window_hours"), int) else None,
-            remaining=limit.get("remaining") if isinstance(limit.get("remaining"), int) else None,
-            limit=limit.get("limit") if isinstance(limit.get("limit"), int) else None,
+            window_hours=_int_or_none(limit.get("window_hours")),
+            remaining=_int_or_none(limit.get("remaining")),
+            limit=_int_or_none(limit.get("limit")),
         )
         if limit.get("type") == "TIME_LIMIT":
             api_calls = window
@@ -102,7 +108,9 @@ def check_zai_quota(
     if _cached_status is not None and time.monotonic() - _cached_status.checked_at < cache_ttl:
         return _cached_status
 
-    fetcher = _fetch if callable(_fetch) else _fetch_usage
+    fetcher = _fetch_usage
+    if callable(_fetch):
+        fetcher = _fetch
     _cached_status = fetcher()
     return _cached_status
 

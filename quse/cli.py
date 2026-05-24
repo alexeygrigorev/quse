@@ -45,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     except click.ClickException as exc:
         exc.show()
         return exc.exit_code
-    return 0 if result is None else int(result)
+    if result is None:
+        return 0
+    return int(result)
 
 
 if __name__ == "__main__":

@@ -40,27 +40,12 @@ def preferred_reset_at(
 def usage_limit_block_reason(engine_name: str, status: UsageStatus) -> str | None:
     if status.error:
         return None
-    if engine_name == "codex":
-        from quse.codex_quota import codex_quota_block_reason
-
-        return codex_quota_block_reason()
-    if engine_name == "claude":
-        from quse.claude_quota import claude_quota_block_reason
-
-        return claude_quota_block_reason()
-    if engine_name == "copilot":
-        from quse.copilot_quota import copilot_quota_block_reason
-
-        return copilot_quota_block_reason()
-    if engine_name in {"goz", "opencode"}:
-        from quse.zai_quota import zai_quota_block_reason
-
-        return zai_quota_block_reason()
     if not status.limit_reached:
         return None
     reset_at = preferred_reset_at(status, include_short_term_fallback=True)
-    reset_suffix = f", resets {reset_at}" if reset_at else ""
-    return f"{engine_name} usage limit reached{reset_suffix}"
+    if reset_at:
+        return f"{engine_name} usage limit reached, resets {reset_at}"
+    return f"{engine_name} usage limit reached"
 
 
 def normalize_reset_at(value: object) -> str | None:

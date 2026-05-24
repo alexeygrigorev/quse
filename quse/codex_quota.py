@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import json
 import logging
 import time
@@ -20,6 +21,12 @@ _AUTH_PATH = Path.home() / ".codex" / "auth.json"
 _CACHE_TTL_SECONDS = 60
 
 
+def _normalize_codex_reset_at(value: object) -> str | None:
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return normalize_reset_at(value)
+
+
 @dataclass(slots=True)
 class CodexQuotaWindow:
     used_percent: float = 0.0
@@ -27,7 +34,7 @@ class CodexQuotaWindow:
 
     def __post_init__(self) -> None:
         self.used_percent = float(self.used_percent)
-        self.reset_at = normalize_reset_at(self.reset_at)
+        self.reset_at = _normalize_codex_reset_at(self.reset_at)
 
     @property
     def percent_remaining(self) -> float:
@@ -44,7 +51,10 @@ class CodexQuotaStatus:
 
     @property
     def short_term(self) -> UsageWindow:
-        return UsageWindow(percent_remaining=100.0)
+        return UsageWindow(
+            percent_remaining=self.primary_window.percent_remaining,
+            reset_at=self.primary_window.reset_at,
+        )
 
     @property
     def long_term(self) -> UsageWindow:
@@ -56,7 +66,9 @@ class CodexQuotaStatus:
     @property
     def earliest_reset_at(self) -> str | None:
         reset_candidates = [value for value in (self.primary_window.reset_at, self.secondary_window.reset_at) if value]
-        return min(reset_candidates) if reset_candidates else None
+        if not reset_candidates:
+            return None
+        return min(reset_candidates)
 
 
 _cached_status: CodexQuotaStatus | None = None
@@ -147,7 +159,9 @@ def check_codex_quota(
         _cached_status = status
         return status
 
-    fetcher = _fetch if callable(_fetch) else _fetch_quota
+    fetcher = _fetch_quota
+    if callable(_fetch):
+        fetcher = _fetch
     status = fetcher(token)
     _cached_status = status
     return status
@@ -164,8 +178,9 @@ def codex_quota_block_reason(
     if status.error is not None:
         return None  # fail-open
     if status.limit_reached:
-        reset_info = f", resets {status.long_term.reset_at}" if status.long_term.reset_at else ""
-        return f"codex quota exhausted (weekly window at {status.long_term.used_percent:.0f}%{reset_info})"
+        if status.long_term.reset_at:
+            return f"codex quota exhausted (weekly window at {status.long_term.used_percent:.0f}%, resets {status.long_term.reset_at})"
+        return f"codex quota exhausted (weekly window at {status.long_term.used_percent:.0f}%)"
     return None
 
 

@@ -97,12 +97,16 @@ def _parse_usage_response(data: dict) -> ClaudeQuotaStatus:
     )
     subscription = data.get("subscription")
 
+    normalized_subscription = None
+    if isinstance(subscription, str) and subscription:
+        normalized_subscription = subscription
+
     return ClaudeQuotaStatus(
         five_hour=five_hour,
         seven_day=seven_day,
         limit_reached=seven_day.percent_remaining <= 5.0,
         checked_at=time.monotonic(),
-        subscription=subscription if isinstance(subscription, str) and subscription else None,
+        subscription=normalized_subscription,
     )
 
 
@@ -142,7 +146,9 @@ def check_claude_quota(
     if token is None:
         return ClaudeQuotaStatus(checked_at=time.monotonic(), error="no-credentials")
 
-    fetcher = _fetch if callable(_fetch) else _fetch_usage
+    fetcher = _fetch_usage
+    if callable(_fetch):
+        fetcher = _fetch
     _cached_status = fetcher(token)
     return _cached_status
 
