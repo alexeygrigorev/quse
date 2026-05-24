@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quse"
+version = "0.0.3"
+description = "Quota and usage checks for coding-agent CLIs."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "Alexey Grigorev"}]
+license = {text = "MIT"}
+keywords = ["codex", "claude", "copilot", "quota", "usage"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "click>=8.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/alexeygrigorev/quse"
+Repository = "https://github.com/alexeygrigorev/quse"
+Issues = "https://github.com/alexeygrigorev/quse/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "hatch>=1.14.0",
+]
+
+[project.scripts]
+quse = "quse.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quse"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/.pytest_cache",
+    "/.ruff_cache",
+    "/.venv",
+    "/dist",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

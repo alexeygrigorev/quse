@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  check-version:
+    name: Verify version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches pyproject.toml
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PYTHON_VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Tag version:    $TAG"
+          echo "Python version: $PYTHON_VERSION"
+          if [ "$TAG" != "$PYTHON_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match pyproject.toml version $PYTHON_VERSION"
+            exit 1
+          fi
+          echo "Version matches: $TAG"
+
+  test:
+    name: Test
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync
+        run: uv sync --dev
+
+      - name: Test
+        run: uv run python -m pytest
+
+      - name: Build
+        run: uv run hatch build
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/quse/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync
+        run: uv sync --dev
+
+      - name: Build
+        run: uv run hatch build
+
+      - name: Publish
+        run: uv publish --trusted-publishing automatic
