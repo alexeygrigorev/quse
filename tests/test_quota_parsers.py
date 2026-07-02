@@ -14,6 +14,71 @@ def test_claude_read_access_token_from_default_shape(tmp_path: Path) -> None:
     assert claude_quota._read_access_token(creds) == "token-123"
 
 
+def test_claude_read_access_token_refreshes_expired_token(tmp_path: Path, monkeypatch) -> None:
+    creds = tmp_path / ".credentials.json"
+    creds.write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "old-token",
+                    "refreshToken": "refresh-token",
+                    "expiresAt": 1,
+                    "scopes": ["user:profile", "user:inference"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "access_token": "new-token",
+                    "refresh_token": "new-refresh-token",
+                    "expires_in": 3600,
+                    "scope": "user:profile user:inference",
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(claude_quota.urllib.request, "urlopen", fake_urlopen)
+
+    assert claude_quota._read_access_token(creds) == "new-token"
+
+    request, timeout = requests[0]
+    assert timeout == 30.0
+    assert request.full_url == "https://platform.claude.com/v1/oauth/token"
+    assert request.get_header("User-agent") == "Claude-Code/2.1.198"
+    body = json.loads(request.data.decode("utf-8"))
+    assert body == {
+        "grant_type": "refresh_token",
+        "refresh_token": "refresh-token",
+        "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        "scope": "user:profile user:inference",
+    }
+    updated = json.loads(creds.read_text(encoding="utf-8"))
+    assert updated["claudeAiOauth"]["accessToken"] == "new-token"
+    assert updated["claudeAiOauth"]["refreshToken"] == "new-refresh-token"
+    assert updated["claudeAiOauth"]["expiresAt"] > 1
+
+
+def test_claude_oauth_client_id_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_CLIENT_ID", "client-from-env")
+
+    assert claude_quota._oauth_client_id() == "client-from-env"
+
+
 def test_claude_parse_usage_response_flags_limits() -> None:
     status = claude_quota._parse_usage_response(
         {
@@ -136,19 +201,27 @@ def test_zai_fetch_usage_parses_limits(monkeypatch) -> None:
             "data": {
                 "limits": [
                     {
-                        "type": "TIME_LIMIT",
+                        "type": "TOKENS_LIMIT",
                         "percentage": 81,
-                        "unit": 1,
+                        "unit": 3,
                         "remaining": 2,
                         "usage": 10,
                     },
                     {
                         "type": "TOKENS_LIMIT",
                         "percentage": 50,
-                        "unit": 24,
+                        "unit": 6,
                         "remaining": 500,
                         "usage": 1000,
                         "nextResetTime": 1770000000000,
+                    },
+                    {
+                        "type": "TIME_LIMIT",
+                        "percentage": 1,
+                        "unit": 5,
+                        "remaining": 3999,
+                        "usage": 4000,
+                        "nextResetTime": 1772500000000,
                     },
                 ]
             }
@@ -158,8 +231,54 @@ def test_zai_fetch_usage_parses_limits(monkeypatch) -> None:
     assert status.limit_reached is False
     assert status.short_term.percent_remaining == 19.0
     assert status.short_term.reset_at is None
+    assert status.five_hour.window_hours == 5
     assert status.long_term.percent_remaining == 50.0
     assert status.long_term.reset_at == "2026-02-02T02:40:00Z"
+    assert status.weekly.window_hours is None
+    assert status.monthly_web_search.percent_remaining == 99.0
+
+
+def test_zai_status_accepts_legacy_window_names() -> None:
+    status = zai_quota.ZaiQuotaStatus(
+        api_calls=zai_quota.ZaiQuotaWindow(used_percent=25),
+        tokens=zai_quota.ZaiQuotaWindow(used_percent=40),
+    )
+
+    assert status.five_hour.percent_remaining == 75.0
+    assert status.weekly.percent_remaining == 60.0
+    assert status.api_calls is status.five_hour
+    assert status.tokens is status.weekly
+
+
+def test_zai_parse_weekly_limit_reached() -> None:
+    status = zai_quota._parse_usage_response(
+        {
+            "limits": [
+                {"type": "TOKENS_LIMIT", "percentage": 20, "unit": 3},
+                {
+                    "type": "TOKENS_LIMIT",
+                    "percentage": 100,
+                    "unit": 6,
+                    "nextResetTime": 1770000000000,
+                },
+            ]
+        }
+    )
+
+    assert status.limit_reached is True
+    assert status.long_term.percent_remaining == 0.0
+
+
+def test_zai_quota_block_reason_reports_reset() -> None:
+    reason = zai_quota.zai_quota_block_reason(
+        _fetch=lambda: zai_quota.ZaiQuotaStatus(
+            weekly=zai_quota.ZaiQuotaWindow(used_percent=100, reset_at="2026-02-02T02:40:00Z"),
+            limit_reached=True,
+            checked_at=1.0,
+        )
+    )
+
+    assert reason == "zai usage limit reached, resets 2026-02-02T02:40:00Z"
 
 
 def test_zai_reads_goz_config_shape(tmp_path: Path) -> None:

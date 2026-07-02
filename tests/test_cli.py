@@ -75,8 +75,8 @@ def test_zai_human_usage_shows_rolling_windows(monkeypatch):
     monkeypatch.setattr(
         "quse.usage.check_zai_quota",
         lambda: ZaiQuotaStatus(
-            api_calls=ZaiQuotaWindow(used_percent=0, window_hours=5),
-            tokens=ZaiQuotaWindow(used_percent=0, window_hours=3),
+            five_hour=ZaiQuotaWindow(used_percent=0, window_hours=5),
+            weekly=ZaiQuotaWindow(used_percent=0),
         ),
     )
     monkeypatch.setattr("quse.usage.zai_quota_block_reason", lambda: None)
@@ -91,7 +91,7 @@ def test_zai_human_usage_shows_rolling_windows(monkeypatch):
         "        reset: rolling 5h\n"
         "    long_term:\n"
         "        usage: 100.0%\n"
-        "        reset: rolling 3h"
+        "        reset: weekly"
     )
 
 

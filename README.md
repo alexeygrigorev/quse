@@ -51,8 +51,8 @@ Provider mapping:
   7-day signal.
 - `copilot`: `short_term` is hardcoded to `100%` remaining, `long_term` maps to
   the monthly premium-interactions signal.
-- `zai`: `short_term` maps to the tokens signal, `long_term` is hardcoded to
-  `100%` remaining.
+- `zai`: `short_term` maps to the 5-hour quota, `long_term` maps to the
+  weekly quota.
 
 ## Install
 
@@ -96,7 +96,7 @@ Use `uvx quse` for a one-off run without installing a persistent tool.
 Releases are published by GitHub Actions when a tag starting with `v` is pushed:
 
 ```bash
-git tag v0.0.5
+git tag v0.0.6
 git push origin main --tags
 ```
 

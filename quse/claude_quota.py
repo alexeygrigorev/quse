@@ -15,7 +15,18 @@ from quse._shared import UsageWindow, normalize_reset_at
 logger = logging.getLogger(__name__)
 
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+_DEFAULT_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_OAUTH_SCOPES = [
+    "user:profile",
+    "user:inference",
+    "user:sessions:claude_code",
+    "user:mcp_servers",
+    "user:file_upload",
+]
+_OAUTH_USER_AGENT = "Claude-Code/2.1.198"
 _CACHE_TTL_SECONDS = 60
+_TOKEN_REFRESH_BUFFER_MS = 300_000
 
 
 @dataclass(slots=True)
@@ -50,6 +61,16 @@ class ClaudeQuotaStatus:
         return UsageWindow(percent_remaining=self.seven_day.percent_remaining, reset_at=self.seven_day.reset_at)
 
 
+@dataclass(slots=True)
+class ClaudeOAuthCredentials:
+    path: Path
+    data: dict
+    access_token: str
+    refresh_token: str | None = None
+    expires_at: int | None = None
+    scopes: list[str] = field(default_factory=list)
+
+
 def _default_credentials_path() -> Path:
     """Resolve Claude credentials path, respecting config dir overrides."""
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
@@ -61,14 +82,30 @@ def _default_credentials_path() -> Path:
 _cached_status: ClaudeQuotaStatus | None = None
 
 
-def _read_access_token(creds_path: Path | None = None) -> str | None:
+def _read_oauth_credentials(creds_path: Path | None = None) -> ClaudeOAuthCredentials | None:
     path = creds_path or _default_credentials_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         oauth = data.get("claudeAiOauth", {})
         token = oauth.get("accessToken")
-        if token:
-            return token
+        if isinstance(token, str) and token:
+            refresh_token = oauth.get("refreshToken")
+            if not isinstance(refresh_token, str) or not refresh_token:
+                refresh_token = None
+            expires_at = oauth.get("expiresAt")
+            if not isinstance(expires_at, int):
+                expires_at = None
+            scopes = oauth.get("scopes")
+            if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+                scopes = []
+            return ClaudeOAuthCredentials(
+                path=path,
+                data=data,
+                access_token=token,
+                refresh_token=refresh_token,
+                expires_at=expires_at,
+                scopes=scopes,
+            )
         logger.warning("claude credentials missing claudeAiOauth.accessToken")
         return None
     except FileNotFoundError:
@@ -77,6 +114,82 @@ def _read_access_token(creds_path: Path | None = None) -> str | None:
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.warning("claude credentials parse error: %s", exc)
         return None
+
+
+def _oauth_token_expires_soon(expires_at: int | None) -> bool:
+    if expires_at is None:
+        return False
+    return int(time.time() * 1000) + _TOKEN_REFRESH_BUFFER_MS >= expires_at
+
+
+def _oauth_client_id() -> str:
+    configured = os.environ.get("CLAUDE_CODE_OAUTH_CLIENT_ID")
+    if configured:
+        return configured
+    return _DEFAULT_OAUTH_CLIENT_ID
+
+
+def _write_oauth_credentials(credentials: ClaudeOAuthCredentials) -> None:
+    tmp_path = credentials.path.with_suffix(f"{credentials.path.suffix}.tmp")
+    tmp_path.write_text(json.dumps(credentials.data, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(credentials.path)
+
+
+def _refresh_access_token(credentials: ClaudeOAuthCredentials, *, timeout: float = 30.0) -> str:
+    if not credentials.refresh_token:
+        raise ValueError("claude refresh token is missing")
+    scopes = credentials.scopes or _OAUTH_SCOPES
+    body = json.dumps(
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": credentials.refresh_token,
+            "client_id": _oauth_client_id(),
+            "scope": " ".join(scopes),
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        _OAUTH_TOKEN_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": _OAUTH_USER_AGENT,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        refreshed = json.loads(response.read().decode("utf-8"))
+
+    access_token = refreshed.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise ValueError("claude oauth refresh response missing access_token")
+
+    oauth = credentials.data.setdefault("claudeAiOauth", {})
+    if not isinstance(oauth, dict):
+        raise ValueError("claude credentials claudeAiOauth is not an object")
+    oauth["accessToken"] = access_token
+    refresh_token = refreshed.get("refresh_token")
+    if isinstance(refresh_token, str) and refresh_token:
+        oauth["refreshToken"] = refresh_token
+    expires_in = refreshed.get("expires_in")
+    if isinstance(expires_in, (int, float)):
+        oauth["expiresAt"] = int(time.time() * 1000 + expires_in * 1000)
+    scope = refreshed.get("scope")
+    if isinstance(scope, str):
+        oauth["scopes"] = scope.split()
+    _write_oauth_credentials(credentials)
+    return access_token
+
+
+def _read_access_token(creds_path: Path | None = None) -> str | None:
+    credentials = _read_oauth_credentials(creds_path)
+    if credentials is None:
+        return None
+    if _oauth_token_expires_soon(credentials.expires_at):
+        try:
+            return _refresh_access_token(credentials)
+        except (ValueError, json.JSONDecodeError, OSError, urllib.error.URLError, TimeoutError) as exc:
+            logger.warning("claude oauth refresh failed; using stored access token: %s", exc)
+    return credentials.access_token
 
 
 def _parse_usage_response(data: dict) -> ClaudeQuotaStatus:

@@ -54,12 +54,14 @@ def _zai_rolling_window(record: dict[str, Any], term: str) -> str | None:
     windows = record["details"].get("windows")
     if not isinstance(windows, dict):
         return None
-    window_key = "tokens"
+    window_key = "weekly"
     if term == "short_term":
-        window_key = "api_calls"
+        window_key = "five_hour"
     window = windows.get(window_key)
     if not isinstance(window, dict):
         return None
+    if window_key == "weekly" and window.get("window_hours") is None:
+        return "weekly"
     return _format_window_hours(window.get("window_hours"))
 
 
@@ -228,8 +230,9 @@ class ZaiUsageProvider(UsageProvider):
             "limit_reached": status_obj.limit_reached,
             "max_used_percent": status_obj.max_used_percent,
             "windows": {
-                "api_calls": asdict(status_obj.api_calls),
-                "tokens": asdict(status_obj.tokens),
+                "five_hour": asdict(status_obj.five_hour),
+                "weekly": asdict(status_obj.weekly),
+                "monthly_web_search": asdict(status_obj.monthly_web_search),
             },
         }
 

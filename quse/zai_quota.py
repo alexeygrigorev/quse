@@ -9,7 +9,7 @@ import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from quse._shared import UsageWindow, normalize_reset_at
+from quse._shared import UsageWindow, normalize_reset_at, usage_limit_block_reason
 
 logger = logging.getLogger(__name__)
 
@@ -78,30 +78,58 @@ class ZaiQuotaWindow:
         return max(0.0, 100.0 - self.used_percent)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class ZaiQuotaStatus:
-    api_calls: ZaiQuotaWindow = field(default_factory=ZaiQuotaWindow)
-    tokens: ZaiQuotaWindow = field(default_factory=ZaiQuotaWindow)
+    five_hour: ZaiQuotaWindow = field(default_factory=ZaiQuotaWindow)
+    weekly: ZaiQuotaWindow = field(default_factory=ZaiQuotaWindow)
+    monthly_web_search: ZaiQuotaWindow = field(default_factory=ZaiQuotaWindow)
     limit_reached: bool = False
     checked_at: float = 0.0
     error: str | None = None
 
+    def __init__(
+        self,
+        *,
+        five_hour: ZaiQuotaWindow | None = None,
+        weekly: ZaiQuotaWindow | None = None,
+        monthly_web_search: ZaiQuotaWindow | None = None,
+        api_calls: ZaiQuotaWindow | None = None,
+        tokens: ZaiQuotaWindow | None = None,
+        limit_reached: bool = False,
+        checked_at: float = 0.0,
+        error: str | None = None,
+    ) -> None:
+        self.five_hour = five_hour or api_calls or ZaiQuotaWindow()
+        self.weekly = weekly or tokens or ZaiQuotaWindow()
+        self.monthly_web_search = monthly_web_search or ZaiQuotaWindow()
+        self.limit_reached = limit_reached
+        self.checked_at = checked_at
+        self.error = error
+
+    @property
+    def api_calls(self) -> ZaiQuotaWindow:
+        return self.five_hour
+
+    @property
+    def tokens(self) -> ZaiQuotaWindow:
+        return self.weekly
+
     @property
     def max_used_percent(self) -> float:
-        return max(self.api_calls.used_percent, self.tokens.used_percent)
+        return max(self.five_hour.used_percent, self.weekly.used_percent)
 
     @property
     def short_term(self) -> UsageWindow:
         return UsageWindow(
-            percent_remaining=self.api_calls.percent_remaining,
-            reset_at=self.api_calls.reset_at,
+            percent_remaining=self.five_hour.percent_remaining,
+            reset_at=self.five_hour.reset_at,
         )
 
     @property
     def long_term(self) -> UsageWindow:
         return UsageWindow(
-            percent_remaining=self.tokens.percent_remaining,
-            reset_at=self.tokens.reset_at,
+            percent_remaining=self.weekly.percent_remaining,
+            reset_at=self.weekly.reset_at,
         )
 
 
@@ -145,8 +173,11 @@ def _fetch_quota_limit(config: ZaiConfig) -> dict:
 
 
 def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
-    api_calls = ZaiQuotaWindow()
-    tokens = ZaiQuotaWindow()
+    five_hour = ZaiQuotaWindow()
+    weekly = ZaiQuotaWindow()
+    monthly_web_search = ZaiQuotaWindow()
+    found_five_hour = False
+    found_weekly = False
 
     if isinstance(data.get("data"), dict):
         data = data["data"]
@@ -163,12 +194,33 @@ def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
             limit=_int_or_none(limit.get("limit", limit.get("usage"))),
             reset_at=_normalize_zai_reset_at(limit.get("reset_at", limit.get("nextResetTime"))),
         )
-        if limit.get("type") == "TIME_LIMIT":
-            api_calls = window
-        if limit.get("type") == "TOKENS_LIMIT":
-            tokens = window
+        limit_type = limit.get("type")
+        unit = window.window_hours
+        if limit_type == "TOKENS_LIMIT" and unit == 3:
+            window.window_hours = 5
+            window.reset_at = None
+            five_hour = window
+            found_five_hour = True
+        elif limit_type == "TOKENS_LIMIT" and unit == 6:
+            window.window_hours = None
+            weekly = window
+            found_weekly = True
+        elif limit_type == "TIME_LIMIT" and unit == 5:
+            monthly_web_search = window
+        elif limit_type == "TIME_LIMIT" and not found_five_hour:
+            five_hour = window
+            found_five_hour = True
+        elif limit_type == "TOKENS_LIMIT" and not found_weekly:
+            weekly = window
+            found_weekly = True
 
-    return ZaiQuotaStatus(api_calls=api_calls, tokens=tokens, checked_at=time.monotonic())
+    return ZaiQuotaStatus(
+        five_hour=five_hour,
+        weekly=weekly,
+        monthly_web_search=monthly_web_search,
+        limit_reached=five_hour.used_percent >= 100.0 or weekly.used_percent >= 100.0,
+        checked_at=time.monotonic(),
+    )
 
 
 def _fetch_usage(*, config_path: Path | None = None) -> ZaiQuotaStatus:
@@ -211,7 +263,7 @@ def zai_quota_block_reason(
     status = check_zai_quota(cache_ttl=cache_ttl, _fetch=_fetch)
     if status.error:
         return None  # fail-open
-    return None
+    return usage_limit_block_reason("zai", status)
 
 
 def reset_cache() -> None:
