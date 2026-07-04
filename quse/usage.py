@@ -83,12 +83,12 @@ def _format_percent(value: float | int | None) -> str:
 
 
 def _format_codex_reset_credit(credit: dict[str, Any]) -> str:
-    status = credit.get("status") or "unknown"
-    title = credit.get("title") or "untitled"
+    title = credit.get("title") or credit.get("status") or "reset credit"
+    title = str(title).split("(", maxsplit=1)[0].strip().lower() or "reset credit"
     expires_at = _format_reset_at(credit.get("expires_at"))
     if expires_at == "unknown":
-        return f"        {status} | {title}"
-    return f"        {status} | {title} | expires: {expires_at}"
+        return f"        {title}"
+    return f"        {title} | expires: {expires_at}"
 
 
 def _format_codex_reset_credit_lines(record: dict[str, Any]) -> list[str]:

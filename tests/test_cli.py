@@ -44,7 +44,7 @@ def test_codex_json_includes_reset_credits(monkeypatch):
             reset_credits=[
                 CodexResetCredit(
                     status="available",
-                    title="Usage reset",
+                    title="Full reset (Weekly + 5 hr)",
                     expires_at="2026-05-24T15:53:01Z",
                 )
             ],
@@ -60,7 +60,7 @@ def test_codex_json_includes_reset_credits(monkeypatch):
     assert details["reset_credits"] == [
         {
             "status": "available",
-            "title": "Usage reset",
+            "title": "Full reset (Weekly + 5 hr)",
             "expires_at": "2026-05-24T15:53:01Z",
         }
     ]
@@ -77,7 +77,7 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
             reset_credits=[
                 CodexResetCredit(
                     status="available",
-                    title="Usage reset",
+                    title="Full reset (Weekly + 5 hr)",
                     expires_at="2026-05-24T15:53:01Z",
                 )
             ],
@@ -91,7 +91,7 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
         assert result.exit_code == 0
         assert (
             "    reset_credits:\n"
-            "        available | Usage reset | expires: 24-05-2026 15:53 (UTC)"
+            "        full reset | expires: 24-05-2026 15:53 (UTC)"
         ) in result.stdout
     finally:
         if original_tz is None:
