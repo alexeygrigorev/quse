@@ -9,6 +9,7 @@ from quse.claude_quota import (
 )
 from quse.codex_quota import (
     CodexQuotaStatus,
+    CodexResetCredit,
     CodexQuotaWindow,
     check_codex_quota,
     codex_quota_block_reason,
@@ -39,6 +40,7 @@ __all__ = [
     "ClaudeQuotaWindow",
     "ClaudeUsageProvider",
     "CodexQuotaStatus",
+    "CodexResetCredit",
     "CodexQuotaWindow",
     "CodexUsageProvider",
     "CopilotQuotaStatus",

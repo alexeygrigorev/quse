@@ -82,6 +82,27 @@ def _format_percent(value: float | int | None) -> str:
     return str(value)
 
 
+def _format_codex_reset_credit(credit: dict[str, Any]) -> str:
+    status = credit.get("status") or "unknown"
+    title = credit.get("title") or "untitled"
+    expires_at = _format_reset_at(credit.get("expires_at"))
+    if expires_at == "unknown":
+        return f"        {status} | {title}"
+    return f"        {status} | {title} | expires: {expires_at}"
+
+
+def _format_codex_reset_credit_lines(record: dict[str, Any]) -> list[str]:
+    if record["provider"] != "codex":
+        return []
+    details = record.get("details")
+    if not isinstance(details, dict):
+        return []
+    credits = details.get("reset_credits")
+    if not isinstance(credits, list) or not credits:
+        return []
+    return ["    reset_credits:", *[_format_codex_reset_credit(credit) for credit in credits if isinstance(credit, dict)]]
+
+
 def usage_window_record(
     *,
     provider: str,
@@ -171,6 +192,9 @@ class CodexUsageProvider(UsageProvider):
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "limit_reached": status_obj.limit_reached,
+            "reset_credits": [asdict(credit) for credit in status_obj.reset_credits],
+            "reset_credits_available": len(status_obj.available_reset_credits),
+            "reset_credits_error": status_obj.reset_credits_error,
             "windows": {
                 "primary_window": asdict(status_obj.primary_window),
                 "secondary_window": asdict(status_obj.secondary_window),
@@ -290,6 +314,7 @@ def format_usage_line(record: dict[str, Any]) -> str:
         f"        usage: {long_usage}%",
         f"        reset: {_format_reset_or_window(record, 'long_term')}",
     ]
+    lines.extend(_format_codex_reset_credit_lines(record))
     if record["block_reason"]:
         lines.append(f"    block_reason: {record['block_reason']}")
     if record["error"]:

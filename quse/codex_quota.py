@@ -17,13 +17,17 @@ from quse._shared import UsageWindow, normalize_reset_at
 logger = logging.getLogger(__name__)
 
 _USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 _AUTH_PATH = Path.home() / ".codex" / "auth.json"
 _CACHE_TTL_SECONDS = 60
 
 
 def _normalize_codex_reset_at(value: object) -> str | None:
     if isinstance(value, int | float):
-        return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp = float(value)
+        if abs(timestamp) > 10_000_000_000:
+            timestamp = timestamp / 1000
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return normalize_reset_at(value)
 
 
@@ -42,12 +46,36 @@ class CodexQuotaWindow:
 
 
 @dataclass(slots=True)
+class CodexResetCredit:
+    status: str | None = None
+    title: str | None = None
+    expires_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.status, str):
+            self.status = self.status.strip() or None
+        else:
+            self.status = None
+        if isinstance(self.title, str):
+            self.title = self.title.strip() or None
+        else:
+            self.title = None
+        self.expires_at = _normalize_codex_reset_at(self.expires_at)
+
+    @property
+    def is_available(self) -> bool:
+        return self.status == "available"
+
+
+@dataclass(slots=True)
 class CodexQuotaStatus:
     primary_window: CodexQuotaWindow = field(default_factory=CodexQuotaWindow)
     secondary_window: CodexQuotaWindow = field(default_factory=CodexQuotaWindow)
     limit_reached: bool = False
     checked_at: float = 0.0
     error: str | None = None
+    reset_credits: list[CodexResetCredit] = field(default_factory=list)
+    reset_credits_error: str | None = None
 
     @property
     def short_term(self) -> UsageWindow:
@@ -69,6 +97,10 @@ class CodexQuotaStatus:
         if not reset_candidates:
             return None
         return min(reset_candidates)
+
+    @property
+    def available_reset_credits(self) -> list[CodexResetCredit]:
+        return [credit for credit in self.reset_credits if credit.is_available]
 
 
 _cached_status: CodexQuotaStatus | None = None
@@ -119,22 +151,56 @@ def _parse_quota_response(data: dict) -> CodexQuotaStatus:
     )
 
 
-def _fetch_quota(token: str, *, timeout: float = 10.0) -> CodexQuotaStatus:
+def _parse_reset_credits_response(data: dict) -> list[CodexResetCredit]:
+    credits = data.get("credits")
+    if not isinstance(credits, list):
+        return []
+
+    parsed: list[CodexResetCredit] = []
+    for item in credits:
+        if not isinstance(item, dict):
+            continue
+        parsed.append(
+            CodexResetCredit(
+                status=item.get("status"),
+                title=item.get("title"),
+                expires_at=item.get("expires_at"),
+            )
+        )
+    return parsed
+
+
+def _fetch_json(url: str, token: str, *, timeout: float) -> dict:
     req = urllib.request.Request(
-        _USAGE_URL,
+        url,
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
         },
         method="GET",
     )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("response is not a JSON object")
+    return data
+
+
+def _fetch_quota(token: str, *, timeout: float = 10.0) -> CodexQuotaStatus:
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return _parse_quota_response(data)
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as exc:
+        data = _fetch_json(_USAGE_URL, token, timeout=timeout)
+        status = _parse_quota_response(data)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, OSError) as exc:
         logger.warning("codex quota check failed (fail-open): %s", exc)
         return CodexQuotaStatus(checked_at=time.monotonic(), error=str(exc))
+
+    try:
+        data = _fetch_json(_RESET_CREDITS_URL, token, timeout=timeout)
+        status.reset_credits = _parse_reset_credits_response(data)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, OSError) as exc:
+        logger.warning("codex reset credits check failed (non-blocking): %s", exc)
+        status.reset_credits_error = str(exc)
+    return status
 
 
 def check_codex_quota(

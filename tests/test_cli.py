@@ -5,7 +5,7 @@ import time
 from click.testing import CliRunner
 
 from quse.cli import app
-from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow
+from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow, CodexResetCredit
 from quse.usage import collect_usage, format_usage_line, normalize_usage_provider
 from quse.zai_quota import ZaiQuotaStatus, ZaiQuotaWindow
 
@@ -35,6 +35,71 @@ def test_usage_single_provider_json(monkeypatch):
     assert record["codex"]["short_term"] == {"percent_remaining": 60.0, "reset_at": "2026-04-30T00:00:00Z"}
     assert record["codex"]["long_term"] == {"percent_remaining": 75.0, "reset_at": "2026-05-01T00:00:00Z"}
     assert result.stdout.startswith("{\n  ")
+
+
+def test_codex_json_includes_reset_credits(monkeypatch):
+    monkeypatch.setattr(
+        "quse.usage.check_codex_quota",
+        lambda: CodexQuotaStatus(
+            reset_credits=[
+                CodexResetCredit(
+                    status="available",
+                    title="Usage reset",
+                    expires_at="2026-05-24T15:53:01Z",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr("quse.usage.codex_quota_block_reason", lambda: None)
+
+    result = CliRunner().invoke(app, ["codex", "--json"])
+
+    assert result.exit_code == 0
+    details = json.loads(result.stdout)["codex"]["details"]
+    assert details["reset_credits_available"] == 1
+    assert details["reset_credits"] == [
+        {
+            "status": "available",
+            "title": "Usage reset",
+            "expires_at": "2026-05-24T15:53:01Z",
+        }
+    ]
+
+
+def test_codex_human_usage_shows_reset_credits(monkeypatch):
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "UTC")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    monkeypatch.setattr(
+        "quse.usage.check_codex_quota",
+        lambda: CodexQuotaStatus(
+            reset_credits=[
+                CodexResetCredit(
+                    status="available",
+                    title="Usage reset",
+                    expires_at="2026-05-24T15:53:01Z",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr("quse.usage.codex_quota_block_reason", lambda: None)
+
+    try:
+        result = CliRunner().invoke(app, ["codex"])
+
+        assert result.exit_code == 0
+        assert (
+            "    reset_credits:\n"
+            "        available | Usage reset | expires: 24-05-2026 15:53 (UTC)"
+        ) in result.stdout
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        if hasattr(time, "tzset"):
+            time.tzset()
 
 
 def test_usage_all_providers_json_is_keyed_by_provider(monkeypatch):

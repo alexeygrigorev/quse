@@ -5,7 +5,9 @@ import json
 import pytest
 
 from quse.codex_quota import (
+    _fetch_quota,
     _parse_quota_response,
+    _parse_reset_credits_response,
     _read_bearer_token,
     check_codex_quota,
     codex_quota_block_reason,
@@ -103,6 +105,49 @@ def test_parse_unix_reset_timestamps():
     assert status.long_term.reset_at == "2026-05-30T20:33:54Z"
 
 
+def test_parse_millisecond_reset_timestamps():
+    status = _parse_quota_response(
+        _make_api_response(
+            primary_reset=1779637981000,
+            secondary_reset=1780173234000,
+        )
+    )
+
+    assert status.short_term.reset_at == "2026-05-24T15:53:01Z"
+    assert status.long_term.reset_at == "2026-05-30T20:33:54Z"
+
+
+def test_parse_reset_credits_response():
+    credits = _parse_reset_credits_response(
+        {
+            "credits": [
+                {
+                    "status": "available",
+                    "title": "Usage reset",
+                    "expires_at": "2026-05-24T15:53:01Z",
+                },
+                {
+                    "status": "expired",
+                    "title": "Old reset",
+                    "expires_at": 1779637981,
+                },
+                "ignored",
+            ]
+        }
+    )
+
+    assert len(credits) == 2
+    assert credits[0].is_available is True
+    assert credits[0].title == "Usage reset"
+    assert credits[0].expires_at == "2026-05-24T15:53:01Z"
+    assert credits[1].is_available is False
+    assert credits[1].expires_at == "2026-05-24T15:53:01Z"
+
+
+def test_parse_reset_credits_response_handles_missing_list():
+    assert _parse_reset_credits_response({}) == []
+
+
 # --- Quota check with caching ---
 
 
@@ -158,6 +203,52 @@ def test_check_quota_cache_expires(tmp_path):
     check_codex_quota(auth_path=auth, cache_ttl=0, _fetch=fake_fetch)
     check_codex_quota(auth_path=auth, cache_ttl=0, _fetch=fake_fetch)
     assert call_count == 2  # cache expired immediately
+
+
+def test_fetch_quota_fetches_reset_credits(monkeypatch):
+    requested_urls = []
+
+    def fake_fetch_json(url, token, *, timeout):
+        requested_urls.append(url)
+        assert token == "tok"
+        assert timeout == 3.0
+        if url.endswith("/usage"):
+            return _make_api_response()
+        return {
+            "credits": [
+                {
+                    "status": "available",
+                    "title": "Usage reset",
+                    "expires_at": "2026-05-24T15:53:01Z",
+                }
+            ]
+        }
+
+    monkeypatch.setattr("quse.codex_quota._fetch_json", fake_fetch_json)
+
+    status = _fetch_quota("tok", timeout=3.0)
+
+    assert [url.rsplit("/", 1)[-1] for url in requested_urls] == ["usage", "rate-limit-reset-credits"]
+    assert status.error is None
+    assert status.reset_credits_error is None
+    assert len(status.reset_credits) == 1
+    assert len(status.available_reset_credits) == 1
+
+
+def test_fetch_quota_reset_credits_failure_is_non_blocking(monkeypatch):
+    def fake_fetch_json(url, token, *, timeout):
+        if url.endswith("/usage"):
+            return _make_api_response()
+        raise OSError("credits unavailable")
+
+    monkeypatch.setattr("quse.codex_quota._fetch_json", fake_fetch_json)
+
+    status = _fetch_quota("tok")
+
+    assert status.error is None
+    assert status.limit_reached is False
+    assert status.reset_credits == []
+    assert status.reset_credits_error == "credits unavailable"
 
 
 def test_check_quota_no_auth(tmp_path):
