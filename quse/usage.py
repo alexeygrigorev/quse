@@ -41,6 +41,32 @@ def _format_reset_at(value: datetime | None) -> str:
     return value.astimezone().strftime("%d-%m-%Y %H:%M (%Z)")
 
 
+def _format_relative(value: datetime, now: datetime) -> str:
+    """Render a reset time as a compact 'in Xd Yh' style countdown.
+
+    ``now`` and ``value`` are compared in UTC; the result is independent of the
+    machine's local timezone so output is stable. Days and hours are the only
+    meaningful units for these (hours-to-weeks) quota windows.
+    """
+    delta = value - now
+    total_seconds = int(delta.total_seconds())
+    if total_seconds <= -60:
+        return "overdue"
+    if total_seconds <= 0:
+        return "now"
+    minutes, _ = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if not days and not hours:
+        parts.append(f"{minutes}m")
+    return "in " + " ".join(parts)
+
+
 def _format_window_hours(value: Any) -> str | None:
     if isinstance(value, int):
         return f"rolling {value}h"
@@ -64,11 +90,17 @@ def _zai_rolling_window(record: dict[str, Any], term: str) -> str | None:
     return _format_window_hours(window.get("window_hours"))
 
 
-def _format_reset_or_window(record: dict[str, Any], term: str) -> str:
+def _format_reset_or_window(
+    record: dict[str, Any], term: str, *, now: datetime | None = None
+) -> str:
     window = record[term]
     reset_at = _format_reset_at(window["reset_at"])
     if reset_at != "unknown":
-        return reset_at
+        if now is not None:
+            current = now
+        else:
+            current = datetime.now(tz=window["reset_at"].tzinfo)
+        return f"{reset_at} / {_format_relative(window['reset_at'], current)}"
     rolling_window = _zai_rolling_window(record, term)
     if rolling_window is not None:
         return rolling_window
@@ -82,7 +114,7 @@ def _format_percent(value: float | int | None) -> str:
 
 
 def _format_codex_reset_credit_lines(
-    record: dict[str, Any], *, header: bool = True
+    record: dict[str, Any], *, header: bool = True, now: datetime | None = None
 ) -> list[str]:
     if record["provider"] != "codex":
         return []
@@ -96,7 +128,7 @@ def _format_codex_reset_credit_lines(
     return [
         f"{indent}reset_credits:",
         *[
-            f"{field_indent}{_format_codex_reset_credit_body(credit)}"
+            f"{field_indent}{_format_codex_reset_credit_body(credit, now=now)}"
             for credit in credits
             if isinstance(credit, dict)
         ],
@@ -109,13 +141,18 @@ def _usage_indents(header: bool) -> tuple[str, str]:
     return "", "    "
 
 
-def _format_codex_reset_credit_body(credit: dict[str, Any]) -> str:
-    title = credit.get("title") or credit.get("status") or "reset credit"
-    title = str(title).split("(", maxsplit=1)[0].strip().lower() or "reset credit"
-    expires_at = _format_reset_at(credit.get("expires_at"))
-    if expires_at == "unknown":
-        return title
-    return f"{title} | expires: {expires_at}"
+def _format_codex_reset_credit_body(
+    credit: dict[str, Any], *, now: datetime | None = None
+) -> str:
+    expires_at = credit.get("expires_at")
+    formatted = _format_reset_at(expires_at)
+    if formatted == "unknown":
+        return "expires: unknown"
+    if now is not None:
+        current = now
+    else:
+        current = datetime.now(tz=expires_at.tzinfo)
+    return f"expires: {formatted} / {_format_relative(expires_at, current)}"
 
 
 def usage_window_record(
@@ -288,24 +325,25 @@ def normalize_usage_provider(provider: str) -> dict[str, Any]:
     return usage_provider_for(provider).normalize()
 
 
-def format_usage_line(record: dict[str, Any], *, header: bool = True) -> str:
+def format_usage_line(
+    record: dict[str, Any], *, header: bool = True, now: datetime | None = None
+) -> str:
     short_term = record["short_term"]
     long_term = record["long_term"]
     short_usage = _format_percent(short_term["percent_remaining"])
     long_usage = _format_percent(long_term["percent_remaining"])
     indent, field_indent = _usage_indents(header)
     lines = [
-        f"{indent}status: {record['status']}",
         f"{indent}short_term:",
         f"{field_indent}remaining: {short_usage}%",
-        f"{field_indent}reset: {_format_reset_or_window(record, 'short_term')}",
+        f"{field_indent}reset: {_format_reset_or_window(record, 'short_term', now=now)}",
         f"{indent}long_term:",
         f"{field_indent}remaining: {long_usage}%",
-        f"{field_indent}reset: {_format_reset_or_window(record, 'long_term')}",
+        f"{field_indent}reset: {_format_reset_or_window(record, 'long_term', now=now)}",
     ]
     if header:
         lines.insert(0, f"{record['provider']}:")
-    lines.extend(_format_codex_reset_credit_lines(record, header=header))
+    lines.extend(_format_codex_reset_credit_lines(record, header=header, now=now))
     if record["error"]:
         lines.append(f"{indent}error: {record['error']}")
     return "\n".join(lines)

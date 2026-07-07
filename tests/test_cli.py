@@ -103,7 +103,7 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
 
         assert result.exit_code == 0
         assert (
-            "reset_credits:\n    full reset | expires: 24-05-2026 15:53 (UTC)"
+            "reset_credits:\n    expires: 24-05-2026 15:53 (UTC) / overdue"
         ) in result.stdout
     finally:
         if original_tz is None:
@@ -206,7 +206,6 @@ def test_zai_human_usage_shows_rolling_windows(monkeypatch):
 
     assert format_usage_line(record) == (
         "zai:\n"
-        "    status: ok\n"
         "    short_term:\n"
         "        remaining: 100.0%\n"
         "        reset: rolling 5h\n"
@@ -264,13 +263,12 @@ def test_human_usage_line_uses_normalized_windows(monkeypatch):
 
         assert result.exit_code == 0
         assert result.stdout.strip() == (
-            "status: ok\n"
             "short_term:\n"
             "    remaining: 60.0%\n"
-            "    reset: 30-04-2026 00:00 (UTC)\n"
+            "    reset: 30-04-2026 00:00 (UTC) / overdue\n"
             "long_term:\n"
             "    remaining: 75.0%\n"
-            "    reset: 01-05-2026 00:00 (UTC)"
+            "    reset: 01-05-2026 00:00 (UTC) / overdue"
         )
     finally:
         if original_tz is None:

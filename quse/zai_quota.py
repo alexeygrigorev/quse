@@ -1,7 +1,7 @@
 """Proactive Z.AI quota checking via the Z.AI monitor API."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import logging
 from pathlib import Path
@@ -31,24 +31,6 @@ def _float_timeout(value: object) -> float:
     return _DEFAULT_TIMEOUT_SECONDS
 
 
-def _normalize_zai_reset_at(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        timestamp = float(value)
-        if timestamp > 10_000_000_000:
-            timestamp = timestamp / 1000
-        parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
-    parsed_reset = normalize_reset_at(value)
-    if parsed_reset is not None:
-        return parsed_reset
-    normalized = str(value).strip()
-    if not normalized.isdigit():
-        return None
-    return _normalize_zai_reset_at(int(normalized))
-
-
 def _monitor_base(url: str) -> str:
     if "/api/anthropic" in url:
         url = url.replace("/api/anthropic", "")
@@ -68,7 +50,7 @@ class ZaiQuotaWindow:
     window_hours: int | None = None
     remaining: int | None = None
     limit: int | None = None
-    reset_at: str | None = None
+    reset_at: datetime | None = None
 
     def __post_init__(self) -> None:
         self.used_percent = float(self.used_percent)
@@ -194,7 +176,7 @@ def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
             window_hours=_int_or_none(limit.get("window_hours", limit.get("unit"))),
             remaining=_int_or_none(limit.get("remaining")),
             limit=_int_or_none(limit.get("limit", limit.get("usage"))),
-            reset_at=_normalize_zai_reset_at(
+            reset_at=normalize_reset_at(
                 limit.get("reset_at", limit.get("nextResetTime"))
             ),
         )

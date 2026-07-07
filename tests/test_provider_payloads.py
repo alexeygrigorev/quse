@@ -1,0 +1,488 @@
+"""Golden-payload tests anchored to real provider API responses.
+
+Each payload below was captured from the live API (codex usage + reset-credit
+endpoints, claude usage, copilot user endpoint, z.ai quota limit). They lock in
+the actual shapes each provider returns and guard the central invariant:
+
+    Every UsageWindow.reset_at is a timezone-aware UTC datetime (or None),
+    never a raw string. A str there crashes the human formatter (.astimezone)
+    and silently bypasses JSON datetime normalization.
+"""
+
+import json
+import time
+from datetime import datetime, timezone
+
+from click.testing import CliRunner
+
+from quse._shared import reset_at_to_iso
+from quse.cli import app
+from quse.codex_quota import _parse_quota_response, _parse_reset_credits_response
+from quse.usage import format_usage_line, normalize_usage_provider
+
+
+# --- captured 2026-07-07 from chatgpt.com/backend-api/wham/usage ---
+
+CODEX_USAGE_PAYLOAD = {
+    "rate_limit": {
+        "allowed": True,
+        "limit_reached": False,
+        "primary_window": {
+            "used_percent": 0,
+            "limit_window_seconds": 18000,
+            "reset_after_seconds": 18000,
+            "reset_at": 1783475303,
+        },
+        "secondary_window": {
+            "used_percent": 98,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 293732,
+            "reset_at": 1783751035,
+        },
+    },
+}
+
+# --- captured 2026-07-07 from chatgpt.com/backend-api/wham/rate-limit-reset-credits ---
+
+CODEX_CREDITS_PAYLOAD = {
+    "credits": [
+        {
+            "status": "available",
+            "reset_type": "codex_rate_limits",
+            "granted_at": "2026-06-26T23:52:15.041002Z",
+            "expires_at": "2026-07-26T23:52:15.041002Z",
+            "title": "Full reset (Weekly + 5 hr)",
+        },
+        {
+            "status": "available",
+            "reset_type": "codex_rate_limits",
+            "granted_at": "2026-07-01T19:09:12.591317Z",
+            "expires_at": "2026-07-31T19:09:12.591317Z",
+            "title": "Full reset (Weekly + 5 hr)",
+        },
+    ],
+    "available_count": 2,
+}
+
+# --- captured 2026-07-07 from api.anthropic.com/api/oauth/usage ---
+
+CLAUDE_USAGE_PAYLOAD = {
+    "five_hour": {
+        "utilization": 38.0,
+        "resets_at": "2026-07-07T23:19:59.903305+00:00",
+    },
+    "seven_day": {
+        "utilization": 76.0,
+        "resets_at": "2026-07-09T14:59:59.903330+00:00",
+    },
+}
+
+# --- captured 2026-07-07 from gh api /copilot_internal/user ---
+
+COPILOT_PAYLOAD = {
+    "login": "alexeygrigorev",
+    "access_type_sku": "free_engaged_oss_quota",
+    "quota_reset_date": "2026-08-01",
+    "quota_reset_date_utc": "2026-08-01T00:00:00.000Z",
+    "quota_snapshots": {
+        "premium_interactions": {
+            "percent_remaining": 97.1,
+            "quota_remaining": 1457.8,
+            "remaining": 1457,
+            "entitlement": 1500,
+            "unlimited": False,
+            "has_quota": True,
+        },
+    },
+}
+
+# --- captured 2026-07-07 from api.z.ai/api/monitor/usage/quota/limit ---
+
+ZAI_PAYLOAD = {
+    "code": 200,
+    "msg": "Operation successful",
+    "success": True,
+    "data": {
+        "limits": [
+            {
+                "type": "TOKENS_LIMIT",
+                "unit": 3,
+                "number": 5,
+                "percentage": 47,
+                "nextResetTime": 1783462930808,
+            },
+            {
+                "type": "TOKENS_LIMIT",
+                "unit": 6,
+                "number": 1,
+                "percentage": 45,
+                "nextResetTime": 1783778698997,
+            },
+            {
+                "type": "TIME_LIMIT",
+                "unit": 5,
+                "number": 1,
+                "usage": 4000,
+                "currentValue": 38,
+                "remaining": 3962,
+                "percentage": 1,
+                "nextResetTime": 1785161098991,
+            },
+        ],
+        "level": "max",
+    },
+}
+
+
+def _assert_reset_at_is_datetime(reset_at: object) -> None:
+    """reset_at must be a tz-aware UTC datetime or None -- never a raw string."""
+    if reset_at is None:
+        return
+    assert isinstance(reset_at, datetime), (
+        f"reset_at must be a datetime, got {type(reset_at).__name__}: {reset_at!r}"
+    )
+    assert reset_at.tzinfo is not None, "reset_at datetime must be timezone-aware"
+
+
+def _set_utc_tz(monkeypatch):
+    monkeypatch.setenv("TZ", "UTC")
+    if hasattr(time, "tzset"):
+        time.tzset()
+
+
+def _freeze_clock(monkeypatch, fixed_now: datetime) -> None:
+    """Pin the relative-countdown clock so human-output assertions are stable."""
+
+    class _FrozenDateTime(datetime):
+       @classmethod
+       def now(cls, tz=None):
+            if tz is None:
+                return fixed_now
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr("quse.usage.datetime", _FrozenDateTime)
+
+
+# ---------------------------------------------------------------------------
+# Codex
+# ---------------------------------------------------------------------------
+
+
+def test_codex_parse_real_payload():
+    status = _parse_quota_response(CODEX_USAGE_PAYLOAD)
+
+    _assert_reset_at_is_datetime(status.primary_window.reset_at)
+    _assert_reset_at_is_datetime(status.secondary_window.reset_at)
+
+    assert reset_at_to_iso(status.short_term.reset_at) == "2026-07-08T01:48:23Z"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-07-11T06:23:55Z"
+    assert status.short_term.percent_remaining == 100.0
+    assert status.long_term.percent_remaining == 2.0
+
+
+def test_codex_parse_real_reset_credits_payload():
+    credits = _parse_reset_credits_response(CODEX_CREDITS_PAYLOAD)
+
+    assert len(credits) == 2
+    assert [c.is_available for c in credits] == [True, True]
+    assert [reset_at_to_iso(c.expires_at) for c in credits] == [
+        "2026-07-26T23:52:15Z",
+        "2026-07-31T19:09:12Z",
+    ]
+    for credit in credits:
+        _assert_reset_at_is_datetime(credit.expires_at)
+
+
+def test_codex_json_round_trips_real_payload(monkeypatch):
+    from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow
+
+    status = CodexQuotaStatus(
+        primary_window=CodexQuotaWindow(used_percent=0, reset_at=1783475303),
+        secondary_window=CodexQuotaWindow(used_percent=98, reset_at=1783751035),
+        reset_credits=_parse_reset_credits_response(CODEX_CREDITS_PAYLOAD),
+    )
+    monkeypatch.setattr("quse.usage.check_codex_quota", lambda: status)
+
+    output = CliRunner().invoke(app, ["codex", "--json"]).output
+    record = json.loads(output)["codex"]
+
+    assert record["short_term"]["reset_at"] == "2026-07-08T01:48:23Z"
+    assert record["long_term"]["reset_at"] == "2026-07-11T06:23:55Z"
+    assert record["details"]["reset_credits_available"] == 2
+    assert record["details"]["reset_credits"][0]["expires_at"] == (
+        "2026-07-26T23:52:15Z"
+     )
+
+
+def test_codex_human_round_trips_real_payload(monkeypatch):
+    _set_utc_tz(monkeypatch)
+    from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow
+
+    status = CodexQuotaStatus(
+        primary_window=CodexQuotaWindow(used_percent=0, reset_at=1783475303),
+        secondary_window=CodexQuotaWindow(used_percent=98, reset_at=1783751035),
+        reset_credits=_parse_reset_credits_response(CODEX_CREDITS_PAYLOAD),
+    )
+    monkeypatch.setattr("quse.usage.check_codex_quota", lambda: status)
+    _freeze_clock(monkeypatch, datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["codex"]).output
+
+    assert output.strip() == (
+        "short_term:\n"
+        "    remaining: 100.0%\n"
+        "    reset: 08-07-2026 01:48 (UTC) / in 13h\n"
+        "long_term:\n"
+        "    remaining: 2.0%\n"
+        "    reset: 11-07-2026 06:23 (UTC) / in 3d 18h\n"
+        "reset_credits:\n"
+        "    expires: 26-07-2026 23:52 (UTC) / in 19d 11h\n"
+        "    expires: 31-07-2026 19:09 (UTC) / in 24d 7h"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Claude
+# ---------------------------------------------------------------------------
+
+
+def test_claude_parse_real_payload():
+    from quse.claude_quota import _parse_usage_response
+
+    status = _parse_usage_response(CLAUDE_USAGE_PAYLOAD)
+
+    _assert_reset_at_is_datetime(status.five_hour.reset_at)
+    _assert_reset_at_is_datetime(status.seven_day.reset_at)
+
+    assert reset_at_to_iso(status.short_term.reset_at) == "2026-07-07T23:19:59Z"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-07-09T14:59:59Z"
+    assert status.short_term.percent_remaining == 62.0
+    assert status.long_term.percent_remaining == 24.0
+
+
+def test_claude_json_round_trips_real_payload(monkeypatch):
+    from quse.claude_quota import _parse_usage_response
+
+    status = _parse_usage_response(CLAUDE_USAGE_PAYLOAD)
+    monkeypatch.setattr("quse.usage.check_claude_quota", lambda: status)
+
+    output = CliRunner().invoke(app, ["claude", "--json"]).output
+    record = json.loads(output)["claude"]
+
+    assert record["short_term"]["reset_at"] == "2026-07-07T23:19:59Z"
+    assert record["long_term"]["reset_at"] == "2026-07-09T14:59:59Z"
+
+
+def test_claude_human_round_trips_real_payload(monkeypatch):
+    _set_utc_tz(monkeypatch)
+    from quse.claude_quota import _parse_usage_response
+
+    status = _parse_usage_response(CLAUDE_USAGE_PAYLOAD)
+    monkeypatch.setattr("quse.usage.check_claude_quota", lambda: status)
+    _freeze_clock(monkeypatch, datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["claude"]).output
+
+    assert output.strip() == (
+        "short_term:\n"
+        "    remaining: 62.0%\n"
+        "    reset: 07-07-2026 23:19 (UTC) / in 11h\n"
+        "long_term:\n"
+        "    remaining: 24.0%\n"
+        "    reset: 09-07-2026 14:59 (UTC) / in 2d 2h"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Copilot
+# ---------------------------------------------------------------------------
+
+
+def _fake_gh_run(payload):
+    import subprocess
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+    return fake_run
+
+
+def test_copilot_parse_real_payload(monkeypatch):
+    import quse.copilot_quota as copilot
+
+    monkeypatch.setattr(copilot.subprocess, "run", _fake_gh_run(COPILOT_PAYLOAD))
+    copilot.reset_cache()
+
+    status = copilot._fetch_quota()
+
+    _assert_reset_at_is_datetime(status.quota_reset_date)
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-08-01T00:00:00Z"
+    assert status.long_term.percent_remaining == 97.1
+
+
+def test_copilot_json_round_trips_real_payload(monkeypatch):
+    import quse.copilot_quota as copilot
+
+    monkeypatch.setattr(copilot.subprocess, "run", _fake_gh_run(COPILOT_PAYLOAD))
+    copilot.reset_cache()
+
+    output = CliRunner().invoke(app, ["copilot", "--json"]).output
+    record = json.loads(output)["copilot"]
+
+    assert record["long_term"]["reset_at"] == "2026-08-01T00:00:00Z"
+    assert record["long_term"]["percent_remaining"] == 97.1
+
+
+def test_copilot_human_round_trips_real_payload(monkeypatch):
+    _set_utc_tz(monkeypatch)
+    import quse.copilot_quota as copilot
+
+    monkeypatch.setattr(copilot.subprocess, "run", _fake_gh_run(COPILOT_PAYLOAD))
+    copilot.reset_cache()
+    _freeze_clock(monkeypatch, datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["copilot"]).output
+
+    assert output.strip() == (
+        "short_term:\n"
+        "    remaining: 100.0%\n"
+        "    reset: unknown\n"
+        "long_term:\n"
+        "    remaining: 97.1%\n"
+        "    reset: 01-08-2026 00:00 (UTC) / in 24d 12h"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Z.AI -- this is the provider the bug shipped on.
+# ---------------------------------------------------------------------------
+
+
+def test_zai_parse_real_payload():
+    from quse.zai_quota import _parse_usage_response
+
+    status = _parse_usage_response(ZAI_PAYLOAD)
+
+    _assert_reset_at_is_datetime(status.five_hour.reset_at)
+    _assert_reset_at_is_datetime(status.weekly.reset_at)
+    _assert_reset_at_is_datetime(status.monthly_web_search.reset_at)
+
+    # five_hour window reset is cleared by the parser (unit==3 -> rolling 5h).
+    assert status.five_hour.reset_at is None
+    assert reset_at_to_iso(status.weekly.reset_at) == "2026-07-11T14:04:58Z"
+    assert status.short_term.percent_remaining == 53.0
+    assert status.long_term.percent_remaining == 55.0
+
+
+def test_zai_json_round_trips_real_payload(monkeypatch):
+    from quse.zai_quota import _parse_usage_response
+
+    status = _parse_usage_response(ZAI_PAYLOAD)
+    monkeypatch.setattr("quse.usage.check_zai_quota", lambda: status)
+
+    output = CliRunner().invoke(app, ["zai", "--json"]).output
+    record = json.loads(output)["zai"]
+
+    assert record["short_term"]["reset_at"] is None
+    assert record["long_term"]["reset_at"] == "2026-07-11T14:04:58Z"
+    assert record["short_term"]["percent_remaining"] == 53.0
+    assert record["long_term"]["percent_remaining"] == 55.0
+
+
+def test_zai_human_round_trips_real_payload(monkeypatch):
+    """The path that crashed in the shipped release: a z.ai long_term reset
+    time flowed through as a str and died on .astimezone()."""
+    _set_utc_tz(monkeypatch)
+    from quse.zai_quota import _parse_usage_response
+
+    status = _parse_usage_response(ZAI_PAYLOAD)
+    monkeypatch.setattr("quse.usage.check_zai_quota", lambda: status)
+    _freeze_clock(monkeypatch, datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["zai"]).output
+
+    assert output.strip() == (
+        "short_term:\n"
+        "    remaining: 53.0%\n"
+        "    reset: rolling 5h\n"
+        "long_term:\n"
+        "    remaining: 55.0%\n"
+        "    reset: 11-07-2026 14:04 (UTC) / in 4d 2h"
+    )
+
+
+def test_zai_normalized_record_has_datetime_reset_at():
+    """format_usage_line must never receive a str reset_at. Guards the
+    boundary directly through normalize_usage_provider."""
+    from quse.zai_quota import _parse_usage_response
+
+    import quse.usage
+
+    status = _parse_usage_response(ZAI_PAYLOAD)
+    original = quse.usage.check_zai_quota
+    quse.usage.check_zai_quota = lambda: status
+    try:
+        record = normalize_usage_provider("zai")
+    finally:
+        quse.usage.check_zai_quota = original
+
+    _assert_reset_at_is_datetime(record["short_term"]["reset_at"])
+    _assert_reset_at_is_datetime(record["long_term"]["reset_at"])
+    format_usage_line(record)
+
+
+# ---------------------------------------------------------------------------
+# _format_relative unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_format_relative_days_and_hours():
+    from datetime import timedelta
+
+    from quse.usage import _format_relative
+
+    now = datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc)
+    value = now + timedelta(days=6, hours=4)
+    assert _format_relative(value, now) == "in 6d 4h"
+
+
+def test_format_relative_hours_only():
+    from datetime import timedelta
+
+    from quse.usage import _format_relative
+
+    now = datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc)
+    value = now + timedelta(hours=4)
+    assert _format_relative(value, now) == "in 4h"
+
+
+def test_format_relative_minutes_only():
+    from datetime import timedelta
+
+    from quse.usage import _format_relative
+
+    now = datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc)
+    value = now + timedelta(minutes=30)
+    assert _format_relative(value, now) == "in 30m"
+
+
+def test_format_relative_now():
+    from quse.usage import _format_relative
+
+    now = datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc)
+    assert _format_relative(now, now) == "now"
+
+
+def test_format_relative_overdue():
+    from datetime import timedelta
+
+    from quse.usage import _format_relative
+
+    now = datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc)
+    value = now - timedelta(days=2)
+    assert _format_relative(value, now) == "overdue"

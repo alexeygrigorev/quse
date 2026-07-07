@@ -4,7 +4,7 @@ import subprocess
 import time
 
 from quse import claude_quota, copilot_quota, zai_quota
-from quse._shared import UsageStatus
+from quse._shared import UsageStatus, reset_at_to_iso
 
 
 def test_claude_read_access_token_from_default_shape(tmp_path: Path) -> None:
@@ -223,7 +223,7 @@ def test_zai_fetch_usage_parses_limits(monkeypatch) -> None:
     assert status.short_term.reset_at is None
     assert status.five_hour.window_hours == 5
     assert status.long_term.percent_remaining == 50.0
-    assert status.long_term.reset_at == "2026-02-02T02:40:00Z"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-02-02T02:40:00Z"
     assert status.weekly.window_hours is None
     assert status.monthly_web_search.percent_remaining == 99.0
 
