@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import click
 
+from quse._shared import reset_at_to_iso
 from quse.usage import UnknownProviderError, collect_usage, format_usage_line
+
+
+def _json_default(value: Any) -> Any:
+    """Serialize non-JSON-native values. All ``datetime`` reset/expiry fields
+    are emitted as canonical ISO-8601 UTC strings (the only datetime form JSON
+    has), so every consumer reads one format."""
+    if isinstance(value, datetime):
+        return reset_at_to_iso(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _json_usage_payload(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -34,7 +45,14 @@ def usage_command(
         raise click.ClickException(str(exc)) from exc
 
     if json_output:
-        click.echo(json.dumps(_json_usage_payload(records), indent=2, sort_keys=True))
+        click.echo(
+            json.dumps(
+                _json_usage_payload(records),
+                indent=2,
+                sort_keys=True,
+                default=_json_default,
+            )
+        )
         return 0
 
     # Single-provider queries drop the redundant "provider:" header and dedent.

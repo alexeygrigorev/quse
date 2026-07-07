@@ -25,21 +25,20 @@ def usage_provider_error_message(name: str) -> str:
 
 def _window_record(window: Any) -> dict[str, Any]:
     if window is None:
-        return {"percent_remaining": None, "reset_at": None}
+        return {"percent_remaining": None, "reset_at": None, "window": None}
     return {
         "percent_remaining": round(float(window.percent_remaining), 2),
+        # A real ``datetime`` (or ``None``) — the JSON boundary serializes it to
+        # ISO-8601 UTC; the human formatter renders it directly.
         "reset_at": window.reset_at,
+        "window": window.window,
     }
 
 
-def _format_reset_at(value: str | None) -> str:
-    if not value:
+def _format_reset_at(value: datetime | None) -> str:
+    if value is None:
         return "unknown"
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    return parsed.astimezone().strftime("%d-%m-%Y %H:%M (%Z)")
+    return value.astimezone().strftime("%d-%m-%Y %H:%M (%Z)")
 
 
 def _format_window_hours(value: Any) -> str | None:

@@ -57,6 +57,7 @@ class ClaudeQuotaStatus:
         return UsageWindow(
             percent_remaining=self.five_hour.percent_remaining,
             reset_at=self.five_hour.reset_at,
+            window="5h",
         )
 
     @property
@@ -64,6 +65,7 @@ class ClaudeQuotaStatus:
         return UsageWindow(
             percent_remaining=self.seven_day.percent_remaining,
             reset_at=self.seven_day.reset_at,
+            window="7d",
         )
 
 

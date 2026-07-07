@@ -123,6 +123,7 @@ class ZaiQuotaStatus:
         return UsageWindow(
             percent_remaining=self.five_hour.percent_remaining,
             reset_at=self.five_hour.reset_at,
+            window="5h",
         )
 
     @property
@@ -130,6 +131,7 @@ class ZaiQuotaStatus:
         return UsageWindow(
             percent_remaining=self.weekly.percent_remaining,
             reset_at=self.weekly.reset_at,
+            window="weekly",
         )
 
 

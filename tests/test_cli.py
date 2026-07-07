@@ -4,9 +4,17 @@ import time
 
 from click.testing import CliRunner
 
+from quse._shared import UsageWindow
+from quse.claude_quota import ClaudeQuotaStatus
 from quse.cli import app
 from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow, CodexResetCredit
-from quse.usage import collect_usage, format_usage_line, normalize_usage_provider
+from quse.copilot_quota import CopilotQuotaStatus
+from quse.usage import (
+    collect_usage,
+    format_usage_line,
+    normalize_usage_provider,
+    usage_window_record,
+)
 from quse.zai_quota import ZaiQuotaStatus, ZaiQuotaWindow
 
 
@@ -34,10 +42,12 @@ def test_usage_single_provider_json(monkeypatch):
     assert record["codex"]["short_term"] == {
         "percent_remaining": 60.0,
         "reset_at": "2026-04-30T00:00:00Z",
+        "window": "5h",
     }
     assert record["codex"]["long_term"] == {
         "percent_remaining": 75.0,
         "reset_at": "2026-05-01T00:00:00Z",
+        "window": "7d",
     }
     assert result.stdout.startswith("{\n  ")
 
@@ -121,6 +131,42 @@ def test_usage_all_providers_json_is_keyed_by_provider(monkeypatch):
     assert result.stdout.startswith("{\n  ")
 
 
+def test_usage_window_record_unified_schema():
+    """Every provider record has the SAME unified shape; each window carries a
+    span label. This is the single schema downstream reads — no provider-specific
+    branching required of consumers."""
+    record = usage_window_record(
+        provider="claude",
+        status="ok",
+        short_term=UsageWindow(percent_remaining=90.0, window="5h"),
+        long_term=UsageWindow(percent_remaining=80.0, window="7d"),
+    )
+    assert set(record) == {
+        "provider",
+        "status",
+        "short_term",
+        "long_term",
+        "error",
+        "details",
+    }
+    assert set(record["short_term"]) == {"percent_remaining", "reset_at", "window"}
+    assert set(record["long_term"]) == {"percent_remaining", "reset_at", "window"}
+    assert record["short_term"]["window"] == "5h"
+    assert record["long_term"]["window"] == "7d"
+
+
+def test_provider_window_span_labels_are_authoritative():
+    """quse owns the concrete span label for every provider window — downstream
+    consumers must not re-derive it."""
+    for status, expected in (
+        (ClaudeQuotaStatus(), ("5h", "7d")),
+        (CodexQuotaStatus(), ("5h", "7d")),
+        (CopilotQuotaStatus(), (None, "monthly")),
+        (ZaiQuotaStatus(), ("5h", "weekly")),
+    ):
+        assert (status.short_term.window, status.long_term.window) == expected
+
+
 def test_usage_unknown_provider_exits_non_zero():
     result = CliRunner().invoke(app, ["wat"])
 
@@ -135,8 +181,16 @@ def test_zai_usage_handles_missing_limit_values(monkeypatch):
 
     record = normalize_usage_provider("zai")
 
-    assert record["short_term"] == {"percent_remaining": 100.0, "reset_at": None}
-    assert record["long_term"] == {"percent_remaining": 100.0, "reset_at": None}
+    assert record["short_term"] == {
+        "percent_remaining": 100.0,
+        "reset_at": None,
+        "window": "5h",
+    }
+    assert record["long_term"] == {
+        "percent_remaining": 100.0,
+        "reset_at": None,
+        "window": "weekly",
+    }
 
 
 def test_zai_human_usage_shows_rolling_windows(monkeypatch):

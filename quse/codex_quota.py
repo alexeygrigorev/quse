@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import logging
 import time
@@ -22,25 +22,16 @@ _AUTH_PATH = Path.home() / ".codex" / "auth.json"
 _CACHE_TTL_SECONDS = 60
 
 
-def _normalize_codex_reset_at(value: object) -> str | None:
-    if isinstance(value, int | float):
-        timestamp = float(value)
-        if abs(timestamp) > 10_000_000_000:
-            timestamp = timestamp / 1000
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-    return normalize_reset_at(value)
-
-
 @dataclass(slots=True)
 class CodexQuotaWindow:
     used_percent: float = 0.0
-    reset_at: str | None = None
+    reset_at: datetime | None = None
 
     def __post_init__(self) -> None:
         self.used_percent = float(self.used_percent)
-        self.reset_at = _normalize_codex_reset_at(self.reset_at)
+        # normalize_reset_at handles Codex's millisecond epochs (and seconds /
+        # ISO), returning a canonical UTC datetime — one normalizer for all.
+        self.reset_at = normalize_reset_at(self.reset_at)
 
     @property
     def percent_remaining(self) -> float:
@@ -51,7 +42,7 @@ class CodexQuotaWindow:
 class CodexResetCredit:
     status: str | None = None
     title: str | None = None
-    expires_at: str | None = None
+    expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.status, str):
@@ -62,7 +53,7 @@ class CodexResetCredit:
             self.title = self.title.strip() or None
         else:
             self.title = None
-        self.expires_at = _normalize_codex_reset_at(self.expires_at)
+        self.expires_at = normalize_reset_at(self.expires_at)
 
     @property
     def is_available(self) -> bool:
@@ -84,6 +75,7 @@ class CodexQuotaStatus:
         return UsageWindow(
             percent_remaining=self.primary_window.percent_remaining,
             reset_at=self.primary_window.reset_at,
+            window="5h",
         )
 
     @property
@@ -91,6 +83,7 @@ class CodexQuotaStatus:
         return UsageWindow(
             percent_remaining=self.secondary_window.percent_remaining,
             reset_at=self.secondary_window.reset_at,
+            window="7d",
         )
 
     @property

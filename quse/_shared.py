@@ -9,7 +9,19 @@ from datetime import datetime, timezone
 @dataclass(slots=True)
 class UsageWindow:
     percent_remaining: float = 100.0
-    reset_at: str | None = None
+    # A real, timezone-aware UTC ``datetime`` (or ``None``). quse is the single
+    # source of truth for the reset time: it parses every provider's raw value
+    # (epoch, ISO, date-only) into one canonical ``datetime`` here, so downstream
+    # consumers never re-parse a string. Serialized to ISO-8601 UTC at the JSON
+    # boundary via [reset_at_to_iso].
+    reset_at: datetime | None = None
+    # Concrete span label for this window (``5h`` / ``7d`` / ``weekly`` /
+    # ``monthly`` / ...). Carried on the unified record so every consumer —
+    # the human formatter, the JSON payload, and downstream clients — renders
+    # the same span without re-deriving it from the provider-specific
+    # ``details`` blob. ``None`` for windows with no meaningful fixed span
+    # (e.g. Copilot's fixed short-term bucket).
+    window: str | None = None
 
     @property
     def used_percent(self) -> float:
@@ -25,23 +37,61 @@ class UsageStatus:
     error: str | None = None
 
 
-def normalize_reset_at(value: object) -> str | None:
+def normalize_reset_at(value: object) -> datetime | None:
+    """Parse a provider's raw reset value into a canonical UTC ``datetime``.
+
+    Accepts an epoch (int/float or digit string), an ISO-8601 string (with or
+    without ``Z``), a date-only ``YYYY-MM-DD`` string, or an existing
+    ``datetime``. Returns a timezone-aware UTC ``datetime``, or ``None`` when the
+    value is missing / unparseable. This is the single normalization point —
+    downstream code holds a real ``datetime``, never a string it must re-parse.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
         parsed = value
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        parsed = _epoch_to_datetime(float(value))
+        if parsed is None:
+            return None
     else:
         normalized = str(value).strip()
         if not normalized:
             return None
-        try:
-            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                parsed = datetime.strptime(normalized, "%Y-%m-%d")
-            except ValueError:
+        if normalized.isdigit():
+            parsed = _epoch_to_datetime(float(normalized))
+            if parsed is None:
                 return None
-            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            try:
+                parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    parsed = datetime.strptime(normalized, "%Y-%m-%d")
+                except ValueError:
+                    return None
+                parsed = parsed.replace(tzinfo=timezone.utc)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return parsed.astimezone(timezone.utc)
+
+
+def _epoch_to_datetime(timestamp: float) -> datetime | None:
+    """Convert a Unix epoch (seconds OR milliseconds) to a UTC ``datetime``.
+
+    Values whose magnitude exceeds ~1e10 are treated as milliseconds (current
+    epoch-seconds are ~1.7e9), matching the millisecond timestamps Codex emits.
+    """
+    if abs(timestamp) > 10_000_000_000:
+        timestamp = timestamp / 1000
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def reset_at_to_iso(value: datetime | None) -> str | None:
+    """Serialize a canonical UTC ``datetime`` to ISO-8601 (``...Z``) for JSON."""
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

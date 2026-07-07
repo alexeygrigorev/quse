@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from quse._shared import reset_at_to_iso
 from quse.codex_quota import (
     _fetch_quota,
     _parse_quota_response,
@@ -75,9 +76,9 @@ def test_parse_limit_not_reached():
     status = _parse_quota_response(_make_api_response(limit_reached=False))
     assert status.limit_reached is False
     assert status.short_term.percent_remaining == 50.0
-    assert status.short_term.reset_at == "2026-04-08T05:00:00Z"
+    assert reset_at_to_iso(status.short_term.reset_at) == "2026-04-08T05:00:00Z"
     assert status.long_term.percent_remaining == 80.0
-    assert status.long_term.reset_at == "2026-04-13T00:00:00Z"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-04-13T00:00:00Z"
 
 
 def test_parse_limit_reached():
@@ -102,8 +103,8 @@ def test_parse_unix_reset_timestamps():
         )
     )
 
-    assert status.short_term.reset_at == "2026-05-24T15:53:01Z"
-    assert status.long_term.reset_at == "2026-05-30T20:33:54Z"
+    assert reset_at_to_iso(status.short_term.reset_at) == "2026-05-24T15:53:01Z"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-05-30T20:33:54Z"
 
 
 def test_parse_millisecond_reset_timestamps():
@@ -114,8 +115,8 @@ def test_parse_millisecond_reset_timestamps():
         )
     )
 
-    assert status.short_term.reset_at == "2026-05-24T15:53:01Z"
-    assert status.long_term.reset_at == "2026-05-30T20:33:54Z"
+    assert reset_at_to_iso(status.short_term.reset_at) == "2026-05-24T15:53:01Z"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-05-30T20:33:54Z"
 
 
 def test_parse_reset_credits_response():
@@ -140,9 +141,9 @@ def test_parse_reset_credits_response():
     assert len(credits) == 2
     assert credits[0].is_available is True
     assert credits[0].title == "Usage reset"
-    assert credits[0].expires_at == "2026-05-24T15:53:01Z"
+    assert reset_at_to_iso(credits[0].expires_at) == "2026-05-24T15:53:01Z"
     assert credits[1].is_available is False
-    assert credits[1].expires_at == "2026-05-24T15:53:01Z"
+    assert reset_at_to_iso(credits[1].expires_at) == "2026-05-24T15:53:01Z"
 
 
 def test_parse_reset_credits_response_handles_missing_list():

@@ -42,6 +42,8 @@ class CopilotQuotaStatus:
 
     @property
     def short_term(self) -> UsageWindow:
+        # Copilot has no meaningful short-term rolling window — the interactive
+        # bucket is a fixed 100%. No span label.
         return UsageWindow(percent_remaining=100.0)
 
     @property
@@ -49,6 +51,7 @@ class CopilotQuotaStatus:
         return UsageWindow(
             percent_remaining=self.premium_percent_remaining,
             reset_at=self.quota_reset_date,
+            window="monthly",
         )
 
 

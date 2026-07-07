@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quse"
-version = "0.0.8"
+version = "0.0.9"
 description = "Quota and usage checks for coding-agent CLIs."
 readme = "README.md"
 requires-python = ">=3.11"
