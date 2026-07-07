@@ -21,10 +21,9 @@ def test_usage_single_provider_json(monkeypatch):
             secondary_window=CodexQuotaWindow(
                 used_percent=25,
                 reset_at="2026-05-01",
-            )
+            ),
         ),
     )
-    monkeypatch.setattr("quse.usage.codex_quota_block_reason", lambda: None)
 
     result = CliRunner().invoke(app, ["codex", "--json"])
 
@@ -32,8 +31,14 @@ def test_usage_single_provider_json(monkeypatch):
     record = json.loads(result.stdout)
     assert set(record) == {"codex"}
     assert record["codex"]["status"] == "ok"
-    assert record["codex"]["short_term"] == {"percent_remaining": 60.0, "reset_at": "2026-04-30T00:00:00Z"}
-    assert record["codex"]["long_term"] == {"percent_remaining": 75.0, "reset_at": "2026-05-01T00:00:00Z"}
+    assert record["codex"]["short_term"] == {
+        "percent_remaining": 60.0,
+        "reset_at": "2026-04-30T00:00:00Z",
+    }
+    assert record["codex"]["long_term"] == {
+        "percent_remaining": 75.0,
+        "reset_at": "2026-05-01T00:00:00Z",
+    }
     assert result.stdout.startswith("{\n  ")
 
 
@@ -50,7 +55,6 @@ def test_codex_json_includes_reset_credits(monkeypatch):
             ],
         ),
     )
-    monkeypatch.setattr("quse.usage.codex_quota_block_reason", lambda: None)
 
     result = CliRunner().invoke(app, ["codex", "--json"])
 
@@ -83,15 +87,13 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
             ],
         ),
     )
-    monkeypatch.setattr("quse.usage.codex_quota_block_reason", lambda: None)
 
     try:
         result = CliRunner().invoke(app, ["codex"])
 
         assert result.exit_code == 0
         assert (
-            "    reset_credits:\n"
-            "        full reset | expires: 24-05-2026 15:53 (UTC)"
+            "reset_credits:\n    full reset | expires: 24-05-2026 15:53 (UTC)"
         ) in result.stdout
     finally:
         if original_tz is None:
@@ -127,8 +129,9 @@ def test_usage_unknown_provider_exits_non_zero():
 
 
 def test_zai_usage_handles_missing_limit_values(monkeypatch):
-    monkeypatch.setattr("quse.usage.check_zai_quota", lambda: __import__("quse").ZaiQuotaStatus())
-    monkeypatch.setattr("quse.usage.zai_quota_block_reason", lambda: None)
+    monkeypatch.setattr(
+        "quse.usage.check_zai_quota", lambda: __import__("quse").ZaiQuotaStatus()
+    )
 
     record = normalize_usage_provider("zai")
 
@@ -144,7 +147,6 @@ def test_zai_human_usage_shows_rolling_windows(monkeypatch):
             weekly=ZaiQuotaWindow(used_percent=0),
         ),
     )
-    monkeypatch.setattr("quse.usage.zai_quota_block_reason", lambda: None)
 
     record = normalize_usage_provider("zai")
 
@@ -152,10 +154,10 @@ def test_zai_human_usage_shows_rolling_windows(monkeypatch):
         "zai:\n"
         "    status: ok\n"
         "    short_term:\n"
-        "        usage: 100.0%\n"
+        "        remaining: 100.0%\n"
         "        reset: rolling 5h\n"
         "    long_term:\n"
-        "        usage: 100.0%\n"
+        "        remaining: 100.0%\n"
         "        reset: weekly"
     )
 
@@ -175,7 +177,12 @@ def test_collect_usage_without_provider_runs_checks_in_parallel(monkeypatch):
     elapsed = time.monotonic() - started_at
 
     assert sorted(calls) == ["claude", "codex", "copilot", "zai"]
-    assert records == [{"provider": "codex"}, {"provider": "claude"}, {"provider": "copilot"}, {"provider": "zai"}]
+    assert records == [
+        {"provider": "codex"},
+        {"provider": "claude"},
+        {"provider": "zai"},
+        {"provider": "copilot"},
+    ]
     assert elapsed < 0.25
 
 
@@ -194,24 +201,22 @@ def test_human_usage_line_uses_normalized_windows(monkeypatch):
             secondary_window=CodexQuotaWindow(
                 used_percent=25,
                 reset_at="2026-05-01",
-            )
+            ),
         ),
     )
-    monkeypatch.setattr("quse.usage.codex_quota_block_reason", lambda: None)
 
     try:
         result = CliRunner().invoke(app, ["codex"])
 
         assert result.exit_code == 0
         assert result.stdout.strip() == (
-            "codex:\n"
-            "    status: ok\n"
-            "    short_term:\n"
-            "        usage: 60.0%\n"
-            "        reset: 30-04-2026 00:00 (UTC)\n"
-            "    long_term:\n"
-            "        usage: 75.0%\n"
-            "        reset: 01-05-2026 00:00 (UTC)"
+            "status: ok\n"
+            "short_term:\n"
+            "    remaining: 60.0%\n"
+            "    reset: 30-04-2026 00:00 (UTC)\n"
+            "long_term:\n"
+            "    remaining: 75.0%\n"
+            "    reset: 01-05-2026 00:00 (UTC)"
         )
     finally:
         if original_tz is None:

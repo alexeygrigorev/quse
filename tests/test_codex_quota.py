@@ -10,7 +10,6 @@ from quse.codex_quota import (
     _parse_reset_credits_response,
     _read_bearer_token,
     check_codex_quota,
-    codex_quota_block_reason,
     reset_cache,
 )
 
@@ -82,7 +81,9 @@ def test_parse_limit_not_reached():
 
 
 def test_parse_limit_reached():
-    status = _parse_quota_response(_make_api_response(limit_reached=True, secondary_pct=85.0))
+    status = _parse_quota_response(
+        _make_api_response(limit_reached=True, secondary_pct=85.0)
+    )
     assert status.limit_reached is True
 
 
@@ -156,7 +157,9 @@ def test_check_quota_limit_reached(tmp_path):
     auth.write_text(json.dumps({"tokens": {"access_token": "tok"}}))
 
     def fake_fetch(token):
-        return _parse_quota_response(_make_api_response(limit_reached=True, secondary_pct=85.0))
+        return _parse_quota_response(
+            _make_api_response(limit_reached=True, secondary_pct=85.0)
+        )
 
     status = check_codex_quota(auth_path=auth, _fetch=fake_fetch)
     assert status.limit_reached is True
@@ -167,7 +170,9 @@ def test_check_quota_not_reached(tmp_path):
     auth.write_text(json.dumps({"tokens": {"access_token": "tok"}}))
 
     def fake_fetch(token):
-        return _parse_quota_response(_make_api_response(limit_reached=False, secondary_pct=30.0))
+        return _parse_quota_response(
+            _make_api_response(limit_reached=False, secondary_pct=30.0)
+        )
 
     status = check_codex_quota(auth_path=auth, _fetch=fake_fetch)
     assert status.limit_reached is False
@@ -228,7 +233,10 @@ def test_fetch_quota_fetches_reset_credits(monkeypatch):
 
     status = _fetch_quota("tok", timeout=3.0)
 
-    assert [url.rsplit("/", 1)[-1] for url in requested_urls] == ["usage", "rate-limit-reset-credits"]
+    assert [url.rsplit("/", 1)[-1] for url in requested_urls] == [
+        "usage",
+        "rate-limit-reset-credits",
+    ]
     assert status.error is None
     assert status.reset_credits_error is None
     assert len(status.reset_credits) == 1
@@ -255,45 +263,6 @@ def test_check_quota_no_auth(tmp_path):
     status = check_codex_quota(auth_path=tmp_path / "nope.json")
     assert status.error == "no auth token"
     assert status.limit_reached is False
-
-
-# --- Block reason ---
-
-
-def test_block_reason_limit_reached(tmp_path):
-    auth = tmp_path / "auth.json"
-    auth.write_text(json.dumps({"tokens": {"access_token": "tok"}}))
-
-    def fake_fetch(token):
-        return _parse_quota_response(
-            _make_api_response(
-                limit_reached=True,
-                secondary_pct=100.0,
-            )
-        )
-
-    reason = codex_quota_block_reason(auth_path=auth, _fetch=fake_fetch)
-    assert reason is not None
-    assert "codex quota exhausted" in reason
-    assert "100%" in reason
-    assert "2026-04" in reason
-
-
-def test_block_reason_not_reached(tmp_path):
-    auth = tmp_path / "auth.json"
-    auth.write_text(json.dumps({"tokens": {"access_token": "tok"}}))
-
-    def fake_fetch(token):
-        return _parse_quota_response(_make_api_response(limit_reached=False))
-
-    reason = codex_quota_block_reason(auth_path=auth, _fetch=fake_fetch)
-    assert reason is None
-
-
-def test_block_reason_fail_open(tmp_path):
-    """When API call fails, codex should not be blocked (fail-open)."""
-    reason = codex_quota_block_reason(auth_path=tmp_path / "nope.json")
-    assert reason is None
 
 
 # Monitoring integration tests live in the litehive test suite — they exercise

@@ -9,12 +9,16 @@ from quse._shared import UsageStatus
 
 def test_claude_read_access_token_from_default_shape(tmp_path: Path) -> None:
     creds = tmp_path / ".credentials.json"
-    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "token-123"}}), encoding="utf-8")
+    creds.write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "token-123"}}), encoding="utf-8"
+    )
 
     assert claude_quota._read_access_token(creds) == "token-123"
 
 
-def test_claude_read_access_token_refreshes_expired_token(tmp_path: Path, monkeypatch) -> None:
+def test_claude_read_access_token_refreshes_expired_token(
+    tmp_path: Path, monkeypatch
+) -> None:
     creds = tmp_path / ".credentials.json"
     creds.write_text(
         json.dumps(
@@ -114,14 +118,6 @@ def test_claude_check_quota_caches_fetch_result() -> None:
     assert calls == ["token-123"]
 
 
-def test_claude_quota_block_reason_is_fail_open() -> None:
-    reason = claude_quota.claude_quota_block_reason(
-        _fetch=lambda _token: UsageStatus(checked_at=1.0, error="boom")
-    )
-
-    assert reason is None
-
-
 def test_copilot_fetch_quota_parses_low_remaining(monkeypatch) -> None:
     monkeypatch.setattr(
         subprocess,
@@ -159,7 +155,9 @@ def test_copilot_fetch_quota_handles_unlimited(monkeypatch) -> None:
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args=args[0],
             returncode=0,
-            stdout=json.dumps({"quota_snapshots": {"premium_interactions": {"unlimited": True}}}),
+            stdout=json.dumps(
+                {"quota_snapshots": {"premium_interactions": {"unlimited": True}}}
+            ),
             stderr="",
         ),
     )
@@ -185,14 +183,6 @@ def test_copilot_check_quota_caches_fetch_result() -> None:
 
     assert first is second
     assert calls == 1
-
-
-def test_copilot_quota_block_reason_is_fail_open() -> None:
-    reason = copilot_quota.copilot_quota_block_reason(
-        _fetch=lambda: UsageStatus(checked_at=1.0, error="boom")
-    )
-
-    assert reason is None
 
 
 def test_zai_fetch_usage_parses_limits(monkeypatch) -> None:
@@ -269,22 +259,16 @@ def test_zai_parse_weekly_limit_reached() -> None:
     assert status.long_term.percent_remaining == 0.0
 
 
-def test_zai_quota_block_reason_reports_reset() -> None:
-    reason = zai_quota.zai_quota_block_reason(
-        _fetch=lambda: zai_quota.ZaiQuotaStatus(
-            weekly=zai_quota.ZaiQuotaWindow(used_percent=100, reset_at="2026-02-02T02:40:00Z"),
-            limit_reached=True,
-            checked_at=1.0,
-        )
-    )
-
-    assert reason == "zai usage limit reached, resets 2026-02-02T02:40:00Z"
-
-
 def test_zai_reads_goz_config_shape(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        json.dumps({"zai_token": "token-123", "zai_base_url": "https://api.z.ai/api/anthropic", "timeout": 9}),
+        json.dumps(
+            {
+                "zai_token": "token-123",
+                "zai_base_url": "https://api.z.ai/api/anthropic",
+                "timeout": 9,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -310,11 +294,3 @@ def test_zai_check_quota_caches_fetch_result() -> None:
 
     assert first is second
     assert calls == 1
-
-
-def test_zai_quota_block_reason_is_fail_open() -> None:
-    reason = zai_quota.zai_quota_block_reason(
-        _fetch=lambda: UsageStatus(checked_at=1.0, error="boom")
-    )
-
-    assert reason is None

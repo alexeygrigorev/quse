@@ -46,7 +46,10 @@ class CopilotQuotaStatus:
 
     @property
     def long_term(self) -> UsageWindow:
-        return UsageWindow(percent_remaining=self.premium_percent_remaining, reset_at=self.quota_reset_date)
+        return UsageWindow(
+            percent_remaining=self.premium_percent_remaining,
+            reset_at=self.quota_reset_date,
+        )
 
 
 _cached_status: CopilotQuotaStatus | None = None
@@ -61,7 +64,9 @@ def _fetch_quota(*, timeout: float = 10.0) -> CopilotQuotaStatus:
             timeout=timeout,
         )
         if result.returncode != 0:
-            return CopilotQuotaStatus(checked_at=time.monotonic(), error=f"gh exit {result.returncode}")
+            return CopilotQuotaStatus(
+                checked_at=time.monotonic(), error=f"gh exit {result.returncode}"
+            )
         data = json.loads(result.stdout)
     except FileNotFoundError:
         return CopilotQuotaStatus(checked_at=time.monotonic(), error="gh not on PATH")
@@ -82,7 +87,9 @@ def _fetch_quota(*, timeout: float = 10.0) -> CopilotQuotaStatus:
     return CopilotQuotaStatus(
         premium_remaining=_int_or_none(premium.get("remaining")),
         premium_entitlement=_int_or_none(premium.get("entitlement")),
-        premium_percent_remaining=max(0.0, float(premium.get("percent_remaining", 100.0))),
+        premium_percent_remaining=max(
+            0.0, float(premium.get("percent_remaining", 100.0))
+        ),
         quota_reset_date=data.get("quota_reset_date"),
         checked_at=time.monotonic(),
     )
@@ -95,7 +102,10 @@ def check_copilot_quota(
 ) -> CopilotQuotaStatus:
     """Check Copilot quota via gh CLI. Returns cached result within TTL. Fails open."""
     global _cached_status
-    if _cached_status is not None and time.monotonic() - _cached_status.checked_at < cache_ttl:
+    if (
+        _cached_status is not None
+        and time.monotonic() - _cached_status.checked_at < cache_ttl
+    ):
         return _cached_status
 
     fetcher = _fetch_quota
@@ -103,23 +113,6 @@ def check_copilot_quota(
         fetcher = _fetch
     _cached_status = fetcher()
     return _cached_status
-
-
-def copilot_quota_block_reason(
-    *,
-    cache_ttl: float = _CACHE_TTL_SECONDS,
-    _fetch: object = None,
-) -> str | None:
-    """Return a blocking reason if Copilot quota is reached, or None."""
-    status = check_copilot_quota(cache_ttl=cache_ttl, _fetch=_fetch)
-    if status.error:
-        return None  # fail-open
-    if status.limit_reached:
-        return (
-            f"copilot premium requests low "
-            f"({status.long_term.percent_remaining:.0f}% remaining, resets {status.long_term.reset_at})"
-        )
-    return None
 
 
 def reset_cache() -> None:

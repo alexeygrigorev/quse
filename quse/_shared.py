@@ -25,29 +25,6 @@ class UsageStatus:
     error: str | None = None
 
 
-def preferred_reset_at(
-    status: UsageStatus,
-    *,
-    include_short_term_fallback: bool = False,
-) -> str | None:
-    if status.long_term.reset_at:
-        return status.long_term.reset_at
-    if include_short_term_fallback:
-        return status.short_term.reset_at
-    return None
-
-
-def usage_limit_block_reason(engine_name: str, status: UsageStatus) -> str | None:
-    if status.error:
-        return None
-    if not status.limit_reached:
-        return None
-    reset_at = preferred_reset_at(status, include_short_term_fallback=True)
-    if reset_at:
-        return f"{engine_name} usage limit reached, resets {reset_at}"
-    return f"{engine_name} usage limit reached"
-
-
 def normalize_reset_at(value: object) -> str | None:
     if value is None:
         return None

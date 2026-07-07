@@ -21,7 +21,9 @@ def _json_usage_payload(records: list[dict[str, Any]]) -> dict[str, dict[str, An
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("provider", required=False)
-@click.option("--json", "json_output", is_flag=True, help="Emit machine-readable JSON output.")
+@click.option(
+    "--json", "json_output", is_flag=True, help="Emit machine-readable JSON output."
+)
 def usage_command(
     provider: str | None = None,
     json_output: bool = False,
@@ -35,8 +37,10 @@ def usage_command(
         click.echo(json.dumps(_json_usage_payload(records), indent=2, sort_keys=True))
         return 0
 
+    # Single-provider queries drop the redundant "provider:" header and dedent.
+    show_header = provider is None
     for record in records:
-        click.echo(format_usage_line(record))
+        click.echo(format_usage_line(record, header=show_header))
     return 0
 
 

@@ -54,11 +54,17 @@ class ClaudeQuotaStatus:
 
     @property
     def short_term(self) -> UsageWindow:
-        return UsageWindow(percent_remaining=self.five_hour.percent_remaining, reset_at=self.five_hour.reset_at)
+        return UsageWindow(
+            percent_remaining=self.five_hour.percent_remaining,
+            reset_at=self.five_hour.reset_at,
+        )
 
     @property
     def long_term(self) -> UsageWindow:
-        return UsageWindow(percent_remaining=self.seven_day.percent_remaining, reset_at=self.seven_day.reset_at)
+        return UsageWindow(
+            percent_remaining=self.seven_day.percent_remaining,
+            reset_at=self.seven_day.reset_at,
+        )
 
 
 @dataclass(slots=True)
@@ -82,7 +88,9 @@ def _default_credentials_path() -> Path:
 _cached_status: ClaudeQuotaStatus | None = None
 
 
-def _read_oauth_credentials(creds_path: Path | None = None) -> ClaudeOAuthCredentials | None:
+def _read_oauth_credentials(
+    creds_path: Path | None = None,
+) -> ClaudeOAuthCredentials | None:
     path = creds_path or _default_credentials_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -96,7 +104,9 @@ def _read_oauth_credentials(creds_path: Path | None = None) -> ClaudeOAuthCreden
             if not isinstance(expires_at, int):
                 expires_at = None
             scopes = oauth.get("scopes")
-            if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+            if not isinstance(scopes, list) or not all(
+                isinstance(scope, str) for scope in scopes
+            ):
                 scopes = []
             return ClaudeOAuthCredentials(
                 path=path,
@@ -135,7 +145,9 @@ def _write_oauth_credentials(credentials: ClaudeOAuthCredentials) -> None:
     tmp_path.replace(credentials.path)
 
 
-def _refresh_access_token(credentials: ClaudeOAuthCredentials, *, timeout: float = 30.0) -> str:
+def _refresh_access_token(
+    credentials: ClaudeOAuthCredentials, *, timeout: float = 30.0
+) -> str:
     if not credentials.refresh_token:
         raise ValueError("claude refresh token is missing")
     scopes = credentials.scopes or _OAUTH_SCOPES
@@ -187,8 +199,16 @@ def _read_access_token(creds_path: Path | None = None) -> str | None:
     if _oauth_token_expires_soon(credentials.expires_at):
         try:
             return _refresh_access_token(credentials)
-        except (ValueError, json.JSONDecodeError, OSError, urllib.error.URLError, TimeoutError) as exc:
-            logger.warning("claude oauth refresh failed; using stored access token: %s", exc)
+        except (
+            ValueError,
+            json.JSONDecodeError,
+            OSError,
+            urllib.error.URLError,
+            TimeoutError,
+        ) as exc:
+            logger.warning(
+                "claude oauth refresh failed; using stored access token: %s", exc
+            )
     return credentials.access_token
 
 
@@ -236,7 +256,12 @@ def _fetch_usage(token: str, *, timeout: float = 10.0) -> ClaudeQuotaStatus:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return _parse_usage_response(data)
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         logger.warning("claude quota check failed (fail-open): %s", exc)
         return ClaudeQuotaStatus(checked_at=time.monotonic(), error=str(exc))
 
@@ -252,7 +277,10 @@ def check_claude_quota(
     Fails open: if auth is missing or API call fails, returns a non-blocking status.
     """
     global _cached_status
-    if _cached_status is not None and time.monotonic() - _cached_status.checked_at < cache_ttl:
+    if (
+        _cached_status is not None
+        and time.monotonic() - _cached_status.checked_at < cache_ttl
+    ):
         return _cached_status
 
     token = _read_access_token(creds_path)
@@ -264,24 +292,6 @@ def check_claude_quota(
         fetcher = _fetch
     _cached_status = fetcher(token)
     return _cached_status
-
-
-def claude_quota_block_reason(
-    *,
-    creds_path: Path | None = None,
-    cache_ttl: float = _CACHE_TTL_SECONDS,
-    _fetch: object = None,
-) -> str | None:
-    """Return a blocking reason string if Claude quota is reached, or None."""
-    status = check_claude_quota(creds_path=creds_path, cache_ttl=cache_ttl, _fetch=_fetch)
-    if status.error:
-        return None  # fail-open
-    if status.limit_reached:
-        return (
-            f"claude usage limit reached "
-            f"(long-term window at {status.long_term.used_percent:.0f}%, resets {status.long_term.reset_at})"
-        )
-    return None
 
 
 def reset_cache() -> None:

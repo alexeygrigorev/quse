@@ -8,10 +8,10 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, TypeAlias
 
-from quse.claude_quota import check_claude_quota, claude_quota_block_reason
-from quse.codex_quota import check_codex_quota, codex_quota_block_reason
-from quse.copilot_quota import check_copilot_quota, copilot_quota_block_reason
-from quse.zai_quota import check_zai_quota, zai_quota_block_reason
+from quse.claude_quota import check_claude_quota
+from quse.codex_quota import check_codex_quota
+from quse.copilot_quota import check_copilot_quota
+from quse.zai_quota import check_zai_quota
 
 
 class UnknownProviderError(ValueError):
@@ -82,16 +82,9 @@ def _format_percent(value: float | int | None) -> str:
     return str(value)
 
 
-def _format_codex_reset_credit(credit: dict[str, Any]) -> str:
-    title = credit.get("title") or credit.get("status") or "reset credit"
-    title = str(title).split("(", maxsplit=1)[0].strip().lower() or "reset credit"
-    expires_at = _format_reset_at(credit.get("expires_at"))
-    if expires_at == "unknown":
-        return f"        {title}"
-    return f"        {title} | expires: {expires_at}"
-
-
-def _format_codex_reset_credit_lines(record: dict[str, Any]) -> list[str]:
+def _format_codex_reset_credit_lines(
+    record: dict[str, Any], *, header: bool = True
+) -> list[str]:
     if record["provider"] != "codex":
         return []
     details = record.get("details")
@@ -100,7 +93,30 @@ def _format_codex_reset_credit_lines(record: dict[str, Any]) -> list[str]:
     credits = details.get("reset_credits")
     if not isinstance(credits, list) or not credits:
         return []
-    return ["    reset_credits:", *[_format_codex_reset_credit(credit) for credit in credits if isinstance(credit, dict)]]
+    indent, field_indent = _usage_indents(header)
+    return [
+        f"{indent}reset_credits:",
+        *[
+            f"{field_indent}{_format_codex_reset_credit_body(credit)}"
+            for credit in credits
+            if isinstance(credit, dict)
+        ],
+    ]
+
+
+def _usage_indents(header: bool) -> tuple[str, str]:
+    if header:
+        return "    ", "        "
+    return "", "    "
+
+
+def _format_codex_reset_credit_body(credit: dict[str, Any]) -> str:
+    title = credit.get("title") or credit.get("status") or "reset credit"
+    title = str(title).split("(", maxsplit=1)[0].strip().lower() or "reset credit"
+    expires_at = _format_reset_at(credit.get("expires_at"))
+    if expires_at == "unknown":
+        return title
+    return f"{title} | expires: {expires_at}"
 
 
 def usage_window_record(
@@ -109,7 +125,6 @@ def usage_window_record(
     status: str,
     short_term: Any,
     long_term: Any,
-    block_reason: str | None,
     error: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -118,7 +133,6 @@ def usage_window_record(
         "status": status,
         "short_term": _window_record(short_term),
         "long_term": _window_record(long_term),
-        "block_reason": block_reason,
         "error": error,
         "details": details or {},
     }
@@ -135,18 +149,15 @@ class UsageProvider(ABC):
                 status="unsupported",
                 short_term=None,
                 long_term=None,
-                block_reason=None,
                 error="unsupported",
             )
 
         status_obj = self.check_status()
-        block_reason = self.block_reason()
         return usage_window_record(
             provider=self.name,
-            status=self.status_label(status_obj, block_reason),
+            status=self.status_label(status_obj),
             short_term=self.short_term_window(status_obj),
             long_term=self.long_term_window(status_obj),
-            block_reason=block_reason,
             error=status_obj.error,
             details=self.details(status_obj),
         )
@@ -155,18 +166,12 @@ class UsageProvider(ABC):
     def check_status(self) -> Any:
         raise NotImplementedError
 
-    @abstractmethod
-    def block_reason(self) -> str | None:
-        raise NotImplementedError
-
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {"limit_reached": status_obj.limit_reached}
 
-    def status_label(self, status_obj: Any, block_reason: str | None) -> str:
+    def status_label(self, status_obj: Any) -> str:
         if status_obj.error:
             return "error"
-        if block_reason:
-            return "blocked"
         return "ok"
 
     def short_term_window(self, status_obj: Any) -> Any:
@@ -185,9 +190,6 @@ class CodexUsageProvider(UsageProvider):
 
     def check_status(self) -> Any:
         return check_codex_quota()
-
-    def block_reason(self) -> str | None:
-        return codex_quota_block_reason()
 
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
@@ -208,9 +210,6 @@ class ClaudeUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         return check_claude_quota()
 
-    def block_reason(self) -> str | None:
-        return claude_quota_block_reason()
-
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "limit_reached": status_obj.limit_reached,
@@ -228,9 +227,6 @@ class CopilotUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         return check_copilot_quota()
 
-    def block_reason(self) -> str | None:
-        return copilot_quota_block_reason()
-
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "premium_percent_remaining": status_obj.premium_percent_remaining,
@@ -245,9 +241,6 @@ class ZaiUsageProvider(UsageProvider):
 
     def check_status(self) -> Any:
         return check_zai_quota()
-
-    def block_reason(self) -> str | None:
-        return zai_quota_block_reason()
 
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
@@ -268,9 +261,6 @@ class GeminiUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         raise NotImplementedError
 
-    def block_reason(self) -> str | None:
-        return None
-
 
 UsageProviderClass: TypeAlias = type[UsageProvider]
 
@@ -278,8 +268,8 @@ UsageProviderClass: TypeAlias = type[UsageProvider]
 USAGE_PROVIDER_CLASSES: tuple[UsageProviderClass, ...] = (
     CodexUsageProvider,
     ClaudeUsageProvider,
-    CopilotUsageProvider,
     ZaiUsageProvider,
+    CopilotUsageProvider,
     GeminiUsageProvider,
 )
 USAGE_PROVIDER_CHOICES = tuple(provider.name for provider in USAGE_PROVIDER_CLASSES)
@@ -299,26 +289,26 @@ def normalize_usage_provider(provider: str) -> dict[str, Any]:
     return usage_provider_for(provider).normalize()
 
 
-def format_usage_line(record: dict[str, Any]) -> str:
+def format_usage_line(record: dict[str, Any], *, header: bool = True) -> str:
     short_term = record["short_term"]
     long_term = record["long_term"]
     short_usage = _format_percent(short_term["percent_remaining"])
     long_usage = _format_percent(long_term["percent_remaining"])
+    indent, field_indent = _usage_indents(header)
     lines = [
-        f"{record['provider']}:",
-        f"    status: {record['status']}",
-        "    short_term:",
-        f"        usage: {short_usage}%",
-        f"        reset: {_format_reset_or_window(record, 'short_term')}",
-        "    long_term:",
-        f"        usage: {long_usage}%",
-        f"        reset: {_format_reset_or_window(record, 'long_term')}",
+        f"{indent}status: {record['status']}",
+        f"{indent}short_term:",
+        f"{field_indent}remaining: {short_usage}%",
+        f"{field_indent}reset: {_format_reset_or_window(record, 'short_term')}",
+        f"{indent}long_term:",
+        f"{field_indent}remaining: {long_usage}%",
+        f"{field_indent}reset: {_format_reset_or_window(record, 'long_term')}",
     ]
-    lines.extend(_format_codex_reset_credit_lines(record))
-    if record["block_reason"]:
-        lines.append(f"    block_reason: {record['block_reason']}")
+    if header:
+        lines.insert(0, f"{record['provider']}:")
+    lines.extend(_format_codex_reset_credit_lines(record, header=header))
     if record["error"]:
-        lines.append(f"    error: {record['error']}")
+        lines.append(f"{indent}error: {record['error']}")
     return "\n".join(lines)
 
 

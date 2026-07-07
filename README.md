@@ -17,7 +17,6 @@ same normalized records as JSON keyed by provider name:
 ```json
 {
   "claude": {
-    "block_reason": null,
     "details": {},
     "error": null,
     "long_term": {
@@ -37,8 +36,8 @@ Supported providers:
 
 - `codex`
 - `claude`
-- `copilot`
 - `zai`
+- `copilot`
 
 `gemini` is accepted and reports `unsupported` because it does not currently
 expose a usage endpoint.

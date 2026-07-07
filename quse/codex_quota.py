@@ -27,7 +27,9 @@ def _normalize_codex_reset_at(value: object) -> str | None:
         timestamp = float(value)
         if abs(timestamp) > 10_000_000_000:
             timestamp = timestamp / 1000
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
     return normalize_reset_at(value)
 
 
@@ -93,7 +95,11 @@ class CodexQuotaStatus:
 
     @property
     def earliest_reset_at(self) -> str | None:
-        reset_candidates = [value for value in (self.primary_window.reset_at, self.secondary_window.reset_at) if value]
+        reset_candidates = [
+            value
+            for value in (self.primary_window.reset_at, self.secondary_window.reset_at)
+            if value
+        ]
         if not reset_candidates:
             return None
         return min(reset_candidates)
@@ -146,7 +152,8 @@ def _parse_quota_response(data: dict) -> CodexQuotaStatus:
     return CodexQuotaStatus(
         primary_window=primary_window,
         secondary_window=secondary_window,
-        limit_reached=bool(rate_limit.get("limit_reached", False)) or secondary_window.used_percent >= 80.0,
+        limit_reached=bool(rate_limit.get("limit_reached", False))
+        or secondary_window.used_percent >= 80.0,
         checked_at=time.monotonic(),
     )
 
@@ -190,14 +197,26 @@ def _fetch_quota(token: str, *, timeout: float = 10.0) -> CodexQuotaStatus:
     try:
         data = _fetch_json(_USAGE_URL, token, timeout=timeout)
         status = _parse_quota_response(data)
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, OSError) as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        ValueError,
+        OSError,
+    ) as exc:
         logger.warning("codex quota check failed (fail-open): %s", exc)
         return CodexQuotaStatus(checked_at=time.monotonic(), error=str(exc))
 
     try:
         data = _fetch_json(_RESET_CREDITS_URL, token, timeout=timeout)
         status.reset_credits = _parse_reset_credits_response(data)
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, OSError) as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        ValueError,
+        OSError,
+    ) as exc:
         logger.warning("codex reset credits check failed (non-blocking): %s", exc)
         status.reset_credits_error = str(exc)
     return status
@@ -231,23 +250,6 @@ def check_codex_quota(
     status = fetcher(token)
     _cached_status = status
     return status
-
-
-def codex_quota_block_reason(
-    *,
-    auth_path: Path | None = None,
-    cache_ttl: float = _CACHE_TTL_SECONDS,
-    _fetch: object = None,
-) -> str | None:
-    """Return a blocking reason string if codex quota is exhausted, or None if OK."""
-    status = check_codex_quota(auth_path=auth_path, cache_ttl=cache_ttl, _fetch=_fetch)
-    if status.error is not None:
-        return None  # fail-open
-    if status.limit_reached:
-        if status.long_term.reset_at:
-            return f"codex quota exhausted (weekly window at {status.long_term.used_percent:.0f}%, resets {status.long_term.reset_at})"
-        return f"codex quota exhausted (weekly window at {status.long_term.used_percent:.0f}%)"
-    return None
 
 
 def reset_cache() -> None:

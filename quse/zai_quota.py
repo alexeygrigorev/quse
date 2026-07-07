@@ -9,7 +9,7 @@ import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from quse._shared import UsageWindow, normalize_reset_at, usage_limit_block_reason
+from quse._shared import UsageWindow, normalize_reset_at
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,9 @@ def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
             window_hours=_int_or_none(limit.get("window_hours", limit.get("unit"))),
             remaining=_int_or_none(limit.get("remaining")),
             limit=_int_or_none(limit.get("limit", limit.get("usage"))),
-            reset_at=_normalize_zai_reset_at(limit.get("reset_at", limit.get("nextResetTime"))),
+            reset_at=_normalize_zai_reset_at(
+                limit.get("reset_at", limit.get("nextResetTime"))
+            ),
         )
         limit_type = limit.get("type")
         unit = window.window_hours
@@ -227,7 +229,14 @@ def _fetch_usage(*, config_path: Path | None = None) -> ZaiQuotaStatus:
     try:
         config = _read_zai_config(config_path)
         data = _fetch_quota_limit(config)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError, OSError, URLError, TimeoutError) as exc:
+    except (
+        FileNotFoundError,
+        ValueError,
+        json.JSONDecodeError,
+        OSError,
+        URLError,
+        TimeoutError,
+    ) as exc:
         logger.warning("zai quota check failed (fail-open): %s", exc)
         return ZaiQuotaStatus(checked_at=time.monotonic(), error=str(exc))
     return _parse_usage_response(data)
@@ -241,7 +250,10 @@ def check_zai_quota(
 ) -> ZaiQuotaStatus:
     """Check Z.AI quota directly. Returns cached result within TTL. Fails open."""
     global _cached_status
-    if _cached_status is not None and time.monotonic() - _cached_status.checked_at < cache_ttl:
+    if (
+        _cached_status is not None
+        and time.monotonic() - _cached_status.checked_at < cache_ttl
+    ):
         return _cached_status
 
     fetcher = _fetch_usage
@@ -252,18 +264,6 @@ def check_zai_quota(
     else:
         _cached_status = fetcher(config_path=config_path)
     return _cached_status
-
-
-def zai_quota_block_reason(
-    *,
-    cache_ttl: float = _CACHE_TTL_SECONDS,
-    _fetch: object = None,
-) -> str | None:
-    """Return a blocking reason if Z.AI quota is reached, or None."""
-    status = check_zai_quota(cache_ttl=cache_ttl, _fetch=_fetch)
-    if status.error:
-        return None  # fail-open
-    return usage_limit_block_reason("zai", status)
 
 
 def reset_cache() -> None:
