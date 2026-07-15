@@ -21,14 +21,58 @@ _RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-cred
 _AUTH_PATH = Path.home() / ".codex" / "auth.json"
 _CACHE_TTL_SECONDS = 60
 
+# Known Codex rate-limit spans → the unified span label. Codex reports the real
+# window duration on each rate-limit window as `limit_window_seconds`; we label
+# the window from that ACTUAL span rather than assuming primary==5h /
+# secondary==7d. Codex temporarily removed the 5h window (mid-2026), so its
+# `primary_window` now carries the WEEKLY (604800s) span — labelling it "5h" by
+# position (the old behaviour) mislabels weekly data as a 5h window.
+_WINDOW_LABELS = {
+    18000: "5h",  # 5 hours
+    604800: "7d",  # 7 days (weekly)
+}
+
+
+def _span_label(limit_window_seconds: int | None, default: str) -> str:
+    """Derive the unified span label from Codex's `limit_window_seconds`.
+
+    Uses the ACTUAL window duration Codex reports so a window is labelled by
+    what it really is, not by its slot. Falls back to `default` (the slot's
+    historical label) only when Codex omits the duration, preserving the
+    legacy positional behaviour for older payloads that lacked the field.
+    """
+    if limit_window_seconds is None:
+        return default
+    seconds = int(limit_window_seconds)
+    label = _WINDOW_LABELS.get(seconds)
+    if label is not None:
+        return label
+    if seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    return f"{seconds}s"
+
 
 @dataclass(slots=True)
 class CodexQuotaWindow:
     used_percent: float = 0.0
     reset_at: datetime | None = None
+    # Codex reports each window's real span here (e.g. 18000=5h, 604800=7d);
+    # used to label the window by its ACTUAL duration. `None` when Codex omits
+    # it (older payloads) → the slot's historical default label is used.
+    limit_window_seconds: int | None = None
+    # True when Codex actually returned this window. Codex now returns
+    # `secondary_window: null` (the 5h window was dropped) — a window that is
+    # NOT present must not be emitted as a phantom "0% / no reset" ghost row.
+    # Defaults True so directly-constructed windows (tests / callers) still
+    # render; only the parser marks an absent API window `present=False`.
+    present: bool = True
 
     def __post_init__(self) -> None:
         self.used_percent = float(self.used_percent)
+        if self.limit_window_seconds is not None:
+            self.limit_window_seconds = int(self.limit_window_seconds)
         # normalize_reset_at handles Codex's millisecond epochs (and seconds /
         # ISO), returning a canonical UTC datetime — one normalizer for all.
         self.reset_at = normalize_reset_at(self.reset_at)
@@ -71,20 +115,12 @@ class CodexQuotaStatus:
     reset_credits_error: str | None = None
 
     @property
-    def short_term(self) -> UsageWindow:
-        return UsageWindow(
-            percent_remaining=self.primary_window.percent_remaining,
-            reset_at=self.primary_window.reset_at,
-            window="5h",
-        )
+    def short_term(self) -> UsageWindow | None:
+        return _as_usage_window(self.primary_window, default_label="5h")
 
     @property
-    def long_term(self) -> UsageWindow:
-        return UsageWindow(
-            percent_remaining=self.secondary_window.percent_remaining,
-            reset_at=self.secondary_window.reset_at,
-            window="7d",
-        )
+    def long_term(self) -> UsageWindow | None:
+        return _as_usage_window(self.secondary_window, default_label="7d")
 
     @property
     def earliest_reset_at(self) -> str | None:
@@ -100,6 +136,28 @@ class CodexQuotaStatus:
     @property
     def available_reset_credits(self) -> list[CodexResetCredit]:
         return [credit for credit in self.reset_credits if credit.is_available]
+
+
+def _as_usage_window(
+    window: CodexQuotaWindow,
+    *,
+    default_label: str,
+) -> UsageWindow | None:
+    """Project a Codex window onto the unified [UsageWindow], or `None`.
+
+    Returns `None` when Codex did not return this window (`present=False`) so a
+    dropped window (e.g. the removed 5h `secondary_window: null`) is omitted
+    rather than emitted as a phantom "0% / no reset" ghost. The span label
+    comes from the window's ACTUAL duration (`limit_window_seconds`), falling
+    back to the slot's historical `default_label` only when Codex omits it.
+    """
+    if not window.present:
+        return None
+    return UsageWindow(
+        percent_remaining=window.percent_remaining,
+        reset_at=window.reset_at,
+        window=_span_label(window.limit_window_seconds, default_label),
+    )
 
 
 _cached_status: CodexQuotaStatus | None = None
@@ -126,21 +184,9 @@ def _parse_quota_response(data: dict) -> CodexQuotaStatus:
     rate_limit = data.get("rate_limit")
     if not isinstance(rate_limit, dict):
         rate_limit = {}
-    primary_data = rate_limit.get("primary_window")
-    if not isinstance(primary_data, dict):
-        primary_data = {}
-    secondary_data = rate_limit.get("secondary_window")
-    if not isinstance(secondary_data, dict):
-        secondary_data = {}
 
-    primary_window = CodexQuotaWindow(
-        used_percent=primary_data.get("used_percent", 0),
-        reset_at=primary_data.get("reset_at"),
-    )
-    secondary_window = CodexQuotaWindow(
-        used_percent=secondary_data.get("used_percent", 0),
-        reset_at=secondary_data.get("reset_at"),
-    )
+    primary_window = _window_from_api(rate_limit.get("primary_window"))
+    secondary_window = _window_from_api(rate_limit.get("secondary_window"))
 
     return CodexQuotaStatus(
         primary_window=primary_window,
@@ -148,6 +194,24 @@ def _parse_quota_response(data: dict) -> CodexQuotaStatus:
         limit_reached=bool(rate_limit.get("limit_reached", False))
         or secondary_window.used_percent >= 80.0,
         checked_at=time.monotonic(),
+    )
+
+
+def _window_from_api(window_data: object) -> CodexQuotaWindow:
+    """Build a [CodexQuotaWindow] from Codex's raw rate-limit window.
+
+    A window Codex OMITS (`null` / non-dict — e.g. the dropped 5h
+    `secondary_window: null`) becomes `present=False` so it is not emitted as a
+    phantom ghost row. A returned window records its real span
+    (`limit_window_seconds`) so it is labelled by its actual duration.
+    """
+    if not isinstance(window_data, dict):
+        return CodexQuotaWindow(present=False)
+    return CodexQuotaWindow(
+        used_percent=window_data.get("used_percent", 0),
+        reset_at=window_data.get("reset_at"),
+        limit_window_seconds=window_data.get("limit_window_seconds"),
+        present=True,
     )
 
 

@@ -91,8 +91,67 @@ def test_parse_limit_reached():
 def test_parse_empty_response():
     status = _parse_quota_response({})
     assert status.limit_reached is False
-    assert status.short_term.percent_remaining == 100.0
-    assert status.long_term.percent_remaining == 100.0
+    # An empty rate_limit returns no windows — neither is present, so neither is
+    # emitted as a phantom window (was: fake 100%-remaining default windows).
+    assert status.short_term is None
+    assert status.long_term is None
+
+
+def test_window_labelled_from_actual_span_not_slot():
+    """Label the window by Codex's real ``limit_window_seconds``, not its slot.
+
+    Regression for pocketshell #1564: Codex temporarily removed the 5h window,
+    so ``primary_window`` now carries the WEEKLY (604800s) span with
+    ``secondary_window: null``. Labelling by slot (primary->"5h", secondary->"7d")
+    mislabels weekly data as a "5h window" and emits a phantom "7d" ghost row.
+    """
+    status = _parse_quota_response(
+        {
+            "rate_limit": {
+                "limit_reached": False,
+                "primary_window": {
+                    "used_percent": 25.0,
+                    "limit_window_seconds": 604800,
+                    "reset_at": "2026-07-21T20:37:32Z",
+                },
+                "secondary_window": None,
+            }
+        }
+    )
+    assert status.short_term is not None
+    assert status.short_term.window == "7d"
+    assert reset_at_to_iso(status.short_term.reset_at) == "2026-07-21T20:37:32Z"
+    assert status.short_term.percent_remaining == 75.0
+    assert status.long_term is None
+
+
+def test_window_span_label_falls_back_to_slot_when_span_absent():
+    """Older payloads without ``limit_window_seconds`` keep the slot label."""
+    status = _parse_quota_response(_make_api_response())
+    assert status.short_term.window == "5h"
+    assert status.long_term.window == "7d"
+
+
+def test_window_span_labels_five_hour_and_weekly_from_seconds():
+    """Both live spans (18000s=5h, 604800s=7d) label correctly."""
+    status = _parse_quota_response(
+        {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 10.0,
+                    "limit_window_seconds": 18000,
+                    "reset_at": "2026-07-21T20:37:32Z",
+                },
+                "secondary_window": {
+                    "used_percent": 40.0,
+                    "limit_window_seconds": 604800,
+                    "reset_at": "2026-07-25T20:37:32Z",
+                },
+            }
+        }
+    )
+    assert status.short_term.window == "5h"
+    assert status.long_term.window == "7d"
 
 
 def test_parse_unix_reset_timestamps():
