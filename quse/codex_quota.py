@@ -116,11 +116,17 @@ class CodexQuotaStatus:
 
     @property
     def short_term(self) -> UsageWindow | None:
-        return _as_usage_window(self.primary_window, default_label="5h")
+        window = _window_for_term(
+            self.primary_window, self.secondary_window, long_term=False
+        )
+        return _as_usage_window(window, default_label="5h")
 
     @property
     def long_term(self) -> UsageWindow | None:
-        return _as_usage_window(self.secondary_window, default_label="7d")
+        window = _window_for_term(
+            self.primary_window, self.secondary_window, long_term=True
+        )
+        return _as_usage_window(window, default_label="7d")
 
     @property
     def earliest_reset_at(self) -> str | None:
@@ -139,7 +145,7 @@ class CodexQuotaStatus:
 
 
 def _as_usage_window(
-    window: CodexQuotaWindow,
+    window: CodexQuotaWindow | None,
     *,
     default_label: str,
 ) -> UsageWindow | None:
@@ -151,13 +157,37 @@ def _as_usage_window(
     comes from the window's ACTUAL duration (`limit_window_seconds`), falling
     back to the slot's historical `default_label` only when Codex omits it.
     """
-    if not window.present:
+    if window is None or not window.present:
         return None
     return UsageWindow(
         percent_remaining=window.percent_remaining,
         reset_at=window.reset_at,
         window=_span_label(window.limit_window_seconds, default_label),
     )
+
+
+def _window_for_term(
+    primary: CodexQuotaWindow,
+    secondary: CodexQuotaWindow,
+    *,
+    long_term: bool,
+) -> CodexQuotaWindow | None:
+    """Select a short- or long-term window from Codex's active windows.
+
+    With two windows Codex exposes the 5-hour window first and the weekly
+    window second. With one window, that sole window is the weekly window.
+    This cardinality rule also works when duration metadata is absent.
+    """
+    windows = [window for window in (primary, secondary) if window.present]
+    if len(windows) == 1:
+        if long_term:
+            return windows[0]
+        return None
+    if len(windows) >= 2:
+        if long_term:
+            return windows[1]
+        return windows[0]
+    return None
 
 
 _cached_status: CodexQuotaStatus | None = None
@@ -188,11 +218,17 @@ def _parse_quota_response(data: dict) -> CodexQuotaStatus:
     primary_window = _window_from_api(rate_limit.get("primary_window"))
     secondary_window = _window_from_api(rate_limit.get("secondary_window"))
 
+    long_term_window = _window_for_term(
+        primary_window, secondary_window, long_term=True
+    )
     return CodexQuotaStatus(
         primary_window=primary_window,
         secondary_window=secondary_window,
         limit_reached=bool(rate_limit.get("limit_reached", False))
-        or secondary_window.used_percent >= 80.0,
+        or (
+            long_term_window is not None
+            and long_term_window.used_percent >= 80.0
+        ),
         checked_at=time.monotonic(),
     )
 

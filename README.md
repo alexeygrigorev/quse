@@ -44,9 +44,10 @@ expose a usage endpoint.
 
 Provider mapping:
 
-- `codex`: `short_term` maps to the primary window, `long_term` maps to the
-  weekly API window. Codex JSON output also includes `details.reset_credits`
-  from ChatGPT's rate-limit reset-credit endpoint when available.
+- `codex`: two API windows map to the 5-hour `short_term` window and weekly
+  `long_term` window; when the API returns one window, it is weekly only.
+  Codex JSON output also includes `details.reset_credits` from ChatGPT's
+  rate-limit reset-credit endpoint when available.
 - `claude`: `short_term` maps to the 5-hour signal, `long_term` maps to the
   7-day signal.
 - `copilot`: `short_term` is hardcoded to `100%` remaining, `long_term` maps to

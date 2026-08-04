@@ -114,6 +114,28 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
             time.tzset()
 
 
+def test_codex_human_usage_omits_absent_short_term_window(monkeypatch):
+    monkeypatch.setattr(
+        "quse.usage.check_codex_quota",
+        lambda: CodexQuotaStatus(
+            primary_window=CodexQuotaWindow(
+                used_percent=90,
+                limit_window_seconds=604800,
+            ),
+            secondary_window=CodexQuotaWindow(present=False),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["codex"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "long_term:\n"
+        "    remaining: 10.0%\n"
+        "    reset: unknown\n"
+    )
+
+
 def test_usage_all_providers_json_is_keyed_by_provider(monkeypatch):
     records = [
         {"provider": "codex", "status": "ok", "error": None},

@@ -328,21 +328,31 @@ def normalize_usage_provider(provider: str) -> dict[str, Any]:
 def format_usage_line(
     record: dict[str, Any], *, header: bool = True, now: datetime | None = None
 ) -> str:
-    short_term = record["short_term"]
-    long_term = record["long_term"]
-    short_usage = _format_percent(short_term["percent_remaining"])
-    long_usage = _format_percent(long_term["percent_remaining"])
     indent, field_indent = _usage_indents(header)
-    lines = [
-        f"{indent}short_term:",
-        f"{field_indent}remaining: {short_usage}%",
-        f"{field_indent}reset: {_format_reset_or_window(record, 'short_term', now=now)}",
-        f"{indent}long_term:",
-        f"{field_indent}remaining: {long_usage}%",
-        f"{field_indent}reset: {_format_reset_or_window(record, 'long_term', now=now)}",
-    ]
+    lines: list[str] = []
     if header:
-        lines.insert(0, f"{record['provider']}:")
+        lines.append(f"{record['provider']}:")
+    for term in ("short_term", "long_term"):
+        window = record[term]
+        # Codex currently exposes only its weekly window. Keep the normalized
+        # JSON shape stable, but do not print a nonexistent human-facing row.
+        if (
+            record["provider"] == "codex"
+            and record["status"] == "ok"
+            and all(
+                window[key] is None
+                for key in ("percent_remaining", "reset_at", "window")
+            )
+        ):
+            continue
+        usage = _format_percent(window["percent_remaining"])
+        lines.extend(
+            [
+                f"{indent}{term}:",
+                f"{field_indent}remaining: {usage}%",
+                f"{field_indent}reset: {_format_reset_or_window(record, term, now=now)}",
+            ]
+        )
     lines.extend(_format_codex_reset_credit_lines(record, header=header, now=now))
     if record["error"]:
         lines.append(f"{indent}error: {record['error']}")

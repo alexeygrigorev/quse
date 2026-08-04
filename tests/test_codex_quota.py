@@ -118,11 +118,47 @@ def test_window_labelled_from_actual_span_not_slot():
             }
         }
     )
-    assert status.short_term is not None
-    assert status.short_term.window == "7d"
-    assert reset_at_to_iso(status.short_term.reset_at) == "2026-07-21T20:37:32Z"
-    assert status.short_term.percent_remaining == 75.0
-    assert status.long_term is None
+    assert status.short_term is None
+    assert status.long_term is not None
+    assert status.long_term.window == "7d"
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-07-21T20:37:32Z"
+    assert status.long_term.percent_remaining == 75.0
+
+
+def test_weekly_primary_window_drives_limit_reached_threshold():
+    status = _parse_quota_response(
+        {
+            "rate_limit": {
+                "limit_reached": False,
+                "primary_window": {
+                    "used_percent": 90.0,
+                    "limit_window_seconds": 604800,
+                },
+                "secondary_window": None,
+            }
+        }
+    )
+
+    assert status.limit_reached is True
+
+
+def test_single_window_is_weekly_even_without_duration_metadata():
+    status = _parse_quota_response(
+        {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 30.0,
+                    "reset_at": "2026-07-21T20:37:32Z",
+                },
+                "secondary_window": None,
+            }
+        }
+    )
+
+    assert status.short_term is None
+    assert status.long_term is not None
+    assert status.long_term.window == "7d"
+    assert status.long_term.percent_remaining == 70.0
 
 
 def test_window_span_label_falls_back_to_slot_when_span_absent():
