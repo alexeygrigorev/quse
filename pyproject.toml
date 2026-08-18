@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "Alexey Grigorev"}]
 license = {text = "MIT"}
-keywords = ["codex", "claude", "copilot", "quota", "usage"]
+keywords = ["codex", "claude", "copilot", "grok", "quota", "usage"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

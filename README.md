@@ -3,7 +3,7 @@
 Quota and usage checks for coding-agent CLIs.
 
 `quse` reports normalized usage for providers used by tools such as Codex,
-Claude Code, GitHub Copilot, and Z.AI/goz.
+Claude Code, GitHub Copilot, Grok Build, and Z.AI/goz.
 
 ```bash
 quse
@@ -38,6 +38,7 @@ Supported providers:
 - `claude`
 - `zai`
 - `copilot`
+- `grok` (alias: `grok-build`)
 
 `gemini` is accepted and reports `unsupported` because it does not currently
 expose a usage endpoint.
@@ -54,6 +55,13 @@ Provider mapping:
   the monthly premium-interactions signal.
 - `zai`: `short_term` maps to the 5-hour quota, `long_term` maps to the
   weekly quota.
+- `grok`: the weekly SuperGrok / X Premium window and the monthly credit
+  window map to `short_term` and `long_term` when both are present; when the
+  API returns one window, it is reported as `long_term`. Weekly remaining
+  prefers the `GrokBuild` entry in `productUsage`, then `creditUsagePercent`.
+  If no percent is reported, `percent_remaining` is `null` while `reset_at`
+  can still be set. Grok JSON output also includes `details.subscription`
+  and `details.product_usage`.
 
 ## Install
 

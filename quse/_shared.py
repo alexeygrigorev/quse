@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 @dataclass(slots=True)
 class UsageWindow:
-    percent_remaining: float = 100.0
+    percent_remaining: float | None = 100.0
     # A real, timezone-aware UTC ``datetime`` (or ``None``). quse is the single
     # source of truth for the reset time: it parses every provider's raw value
     # (epoch, ISO, date-only) into one canonical ``datetime`` here, so downstream
@@ -25,6 +25,8 @@ class UsageWindow:
 
     @property
     def used_percent(self) -> float:
+        if self.percent_remaining is None:
+            return 0.0
         return max(0.0, 100.0 - self.percent_remaining)
 
 

@@ -13,13 +13,16 @@ from quse.codex_quota import (
     check_codex_quota,
 )
 from quse.copilot_quota import CopilotQuotaStatus, check_copilot_quota
+from quse.grok_quota import GrokQuotaStatus, GrokQuotaWindow, check_grok_quota
 from quse.usage import (
     SUPPORTED_USAGE_PROVIDERS,
+    USAGE_PROVIDER_ALIASES,
     USAGE_PROVIDER_CHOICES,
     ClaudeUsageProvider,
     CodexUsageProvider,
     CopilotUsageProvider,
     GeminiUsageProvider,
+    GrokUsageProvider,
     UnknownProviderError,
     UsageProvider,
     ZaiUsageProvider,
@@ -44,7 +47,11 @@ __all__ = [
     "CopilotQuotaStatus",
     "CopilotUsageProvider",
     "GeminiUsageProvider",
+    "GrokQuotaStatus",
+    "GrokQuotaWindow",
+    "GrokUsageProvider",
     "SUPPORTED_USAGE_PROVIDERS",
+    "USAGE_PROVIDER_ALIASES",
     "USAGE_PROVIDER_CHOICES",
     "UnknownProviderError",
     "UsageProvider",
@@ -56,6 +63,7 @@ __all__ = [
     "check_claude_quota",
     "check_codex_quota",
     "check_copilot_quota",
+    "check_grok_quota",
     "check_zai_quota",
     "collect_usage",
     "format_usage_line",

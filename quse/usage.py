@@ -11,6 +11,7 @@ from typing import Any, TypeAlias
 from quse.claude_quota import check_claude_quota
 from quse.codex_quota import check_codex_quota
 from quse.copilot_quota import check_copilot_quota
+from quse.grok_quota import check_grok_quota
 from quse.zai_quota import check_zai_quota
 
 
@@ -26,8 +27,13 @@ def usage_provider_error_message(name: str) -> str:
 def _window_record(window: Any) -> dict[str, Any]:
     if window is None:
         return {"percent_remaining": None, "reset_at": None, "window": None}
+    remaining = window.percent_remaining
+    if remaining is None:
+        percent = None
+    else:
+        percent = round(float(remaining), 2)
     return {
-        "percent_remaining": round(float(window.percent_remaining), 2),
+        "percent_remaining": percent,
         # A real ``datetime`` (or ``None``) — the JSON boundary serializes it to
         # ISO-8601 UTC; the human formatter renders it directly.
         "reset_at": window.reset_at,
@@ -110,7 +116,22 @@ def _format_reset_or_window(
 def _format_percent(value: float | int | None) -> str:
     if value is None:
         return "unknown"
-    return str(value)
+    return f"{value}%"
+
+
+def _format_grok_subscription_lines(
+    record: dict[str, Any], *, header: bool = True
+) -> list[str]:
+    if record["provider"] != "grok":
+        return []
+    details = record.get("details")
+    if not isinstance(details, dict):
+        return []
+    subscription = details.get("subscription")
+    if not isinstance(subscription, str) or not subscription:
+        return []
+    indent, _field_indent = _usage_indents(header)
+    return [f"{indent}subscription: {subscription}"]
 
 
 def _format_codex_reset_credit_lines(
@@ -290,6 +311,29 @@ class ZaiUsageProvider(UsageProvider):
         }
 
 
+class GrokUsageProvider(UsageProvider):
+    name = "grok"
+
+    def check_status(self) -> Any:
+        return check_grok_quota()
+
+    def details(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "limit_reached": status_obj.limit_reached,
+            "subscription": status_obj.subscription,
+            "has_grok_code_access": status_obj.has_grok_code_access,
+            "is_unified_billing_user": status_obj.is_unified_billing_user,
+            "prepaid_balance": status_obj.prepaid_balance,
+            "on_demand_cap": status_obj.on_demand_cap,
+            "on_demand_used": status_obj.on_demand_used,
+            "product_usage": status_obj.product_usage,
+            "windows": {
+                "weekly": asdict(status_obj.weekly),
+                "monthly": asdict(status_obj.monthly),
+            },
+        }
+
+
 class GeminiUsageProvider(UsageProvider):
     name = "gemini"
     supported = False
@@ -306,17 +350,34 @@ USAGE_PROVIDER_CLASSES: tuple[UsageProviderClass, ...] = (
     ClaudeUsageProvider,
     ZaiUsageProvider,
     CopilotUsageProvider,
+    GrokUsageProvider,
     GeminiUsageProvider,
 )
-USAGE_PROVIDER_CHOICES = tuple(provider.name for provider in USAGE_PROVIDER_CLASSES)
+USAGE_PROVIDER_ALIASES = {
+    "grok-build": "grok",
+}
+USAGE_PROVIDER_CHOICES = tuple(
+    [provider.name for provider in USAGE_PROVIDER_CLASSES]
+    + [alias for alias in USAGE_PROVIDER_ALIASES if alias not in {
+        provider.name for provider in USAGE_PROVIDER_CLASSES
+    }]
+)
 SUPPORTED_USAGE_PROVIDERS = tuple(
     provider.name for provider in USAGE_PROVIDER_CLASSES if provider.supported
 )
 
 
+def _canonical_provider_name(name: str) -> str:
+    aliased = USAGE_PROVIDER_ALIASES.get(name)
+    if aliased is not None:
+        return aliased
+    return name
+
+
 def usage_provider_for(name: str) -> UsageProvider:
+    canonical = _canonical_provider_name(name)
     for provider_class in USAGE_PROVIDER_CLASSES:
-        if provider_class.name == name:
+        if provider_class.name == canonical:
             return provider_class()
     raise UnknownProviderError(usage_provider_error_message(name))
 
@@ -332,24 +393,21 @@ def format_usage_line(
     lines: list[str] = []
     if header:
         lines.append(f"{record['provider']}:")
+    lines.extend(_format_grok_subscription_lines(record, header=header))
     for term in ("short_term", "long_term"):
         window = record[term]
-        # Codex currently exposes only its weekly window. Keep the normalized
-        # JSON shape stable, but do not print a nonexistent human-facing row.
-        if (
-            record["provider"] == "codex"
-            and record["status"] == "ok"
-            and all(
-                window[key] is None
-                for key in ("percent_remaining", "reset_at", "window")
-            )
+        # Keep the normalized JSON shape stable, but do not print a
+        # nonexistent human-facing row when a provider omits a window.
+        if record["status"] == "ok" and all(
+            window[key] is None
+            for key in ("percent_remaining", "reset_at", "window")
         ):
             continue
         usage = _format_percent(window["percent_remaining"])
         lines.extend(
             [
                 f"{indent}{term}:",
-                f"{field_indent}remaining: {usage}%",
+                f"{field_indent}remaining: {usage}",
                 f"{field_indent}reset: {_format_reset_or_window(record, term, now=now)}",
             ]
         )
@@ -361,13 +419,10 @@ def format_usage_line(
 
 def selected_providers(provider: str | None) -> list[str]:
     if provider is None:
-        providers = list(SUPPORTED_USAGE_PROVIDERS)
-    else:
-        providers = [provider]
-    for name in providers:
-        if name not in USAGE_PROVIDER_CHOICES:
-            raise UnknownProviderError(usage_provider_error_message(name))
-    return providers
+        return list(SUPPORTED_USAGE_PROVIDERS)
+    if provider not in USAGE_PROVIDER_CHOICES:
+        raise UnknownProviderError(usage_provider_error_message(provider))
+    return [_canonical_provider_name(provider)]
 
 
 def collect_usage(provider: str | None = None) -> list[dict[str, Any]]:

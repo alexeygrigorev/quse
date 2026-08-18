@@ -9,6 +9,7 @@ from quse.claude_quota import ClaudeQuotaStatus
 from quse.cli import app
 from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow, CodexResetCredit
 from quse.copilot_quota import CopilotQuotaStatus
+from quse.grok_quota import GrokQuotaStatus, GrokQuotaWindow
 from quse.usage import (
     collect_usage,
     format_usage_line,
@@ -185,8 +186,31 @@ def test_provider_window_span_labels_are_authoritative():
         (CodexQuotaStatus(), ("5h", "7d")),
         (CopilotQuotaStatus(), (None, "monthly")),
         (ZaiQuotaStatus(), ("5h", "weekly")),
+        (
+            GrokQuotaStatus(
+                weekly=GrokQuotaWindow(present=True, used_percent=10),
+                monthly=GrokQuotaWindow(present=True, used_percent=20, limit=100),
+            ),
+            ("weekly", "monthly"),
+        ),
     ):
-        assert (status.short_term.window, status.long_term.window) == expected
+        if status.short_term is None:
+            short_window = None
+        else:
+            short_window = status.short_term.window
+        if status.long_term is None:
+            long_window = None
+        else:
+            long_window = status.long_term.window
+        assert (short_window, long_window) == expected
+
+
+def test_grok_build_alias_normalizes_to_grok(monkeypatch):
+    monkeypatch.setattr("quse.usage.check_grok_quota", lambda: GrokQuotaStatus())
+
+    record = normalize_usage_provider("grok-build")
+
+    assert record["provider"] == "grok"
 
 
 def test_usage_unknown_provider_exits_non_zero():
@@ -251,12 +275,13 @@ def test_collect_usage_without_provider_runs_checks_in_parallel(monkeypatch):
     records = collect_usage()
     elapsed = time.monotonic() - started_at
 
-    assert sorted(calls) == ["claude", "codex", "copilot", "zai"]
+    assert sorted(calls) == ["claude", "codex", "copilot", "grok", "zai"]
     assert records == [
         {"provider": "codex"},
         {"provider": "claude"},
         {"provider": "zai"},
         {"provider": "copilot"},
+        {"provider": "grok"},
     ]
     assert elapsed < 0.25
 

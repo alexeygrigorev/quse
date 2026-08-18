@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import time
 
-from quse import claude_quota, copilot_quota, zai_quota
+from quse import claude_quota, copilot_quota, grok_quota, zai_quota
 from quse._shared import UsageStatus, reset_at_to_iso
 
 
@@ -277,6 +277,31 @@ def test_zai_reads_goz_config_shape(tmp_path: Path) -> None:
     assert config.token == "token-123"
     assert config.base_url == "https://api.z.ai/api/anthropic"
     assert config.timeout == 9.0
+
+
+def test_grok_parse_usage_flags_weekly_and_monthly() -> None:
+    status = grok_quota._parse_billing_payloads(
+        monthly={
+            "config": {
+                "monthlyLimit": {"val": 100},
+                "used": {"val": 40},
+                "billingPeriodEnd": "2026-09-01T00:00:00Z",
+            }
+        },
+        credits={
+            "config": {
+                "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"},
+                "creditUsagePercent": 10,
+                "billingPeriodEnd": "2026-08-25T00:00:00Z",
+            }
+        },
+        user={"subscriptionTier": "SuperGrokPlus"},
+    )
+
+    assert status.limit_reached is False
+    assert status.short_term.percent_remaining == 90.0
+    assert status.long_term.percent_remaining == 60.0
+    assert status.subscription == "SuperGrokPlus"
 
 
 def test_zai_check_quota_caches_fetch_result() -> None:

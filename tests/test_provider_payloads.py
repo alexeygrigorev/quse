@@ -1,7 +1,8 @@
 """Golden-payload tests anchored to real provider API responses.
 
 Each payload below was captured from the live API (codex usage + reset-credit
-endpoints, claude usage, copilot user endpoint, z.ai quota limit). They lock in
+endpoints, claude usage, copilot user endpoint, z.ai quota limit, grok billing).
+They lock in
 the actual shapes each provider returns and guard the central invariant:
 
     Every UsageWindow.reset_at is a timezone-aware UTC datetime (or None),
@@ -97,6 +98,76 @@ COPILOT_PAYLOAD = {
 }
 
 # --- captured 2026-07-07 from api.z.ai/api/monitor/usage/quota/limit ---
+
+# --- captured 2026-08-18 from cli-chat-proxy.grok.com/v1/billing ---
+
+GROK_MONTHLY_PAYLOAD = {
+    "config": {
+        "monthlyLimit": {"val": 0},
+        "used": {"val": 0},
+        "onDemandCap": {"val": 0},
+        "billingPeriodStart": "2026-08-01T00:00:00+00:00",
+        "billingPeriodEnd": "2026-09-01T00:00:00+00:00",
+        "history": [
+            {
+                "billingCycle": {"year": 2026, "month": 7},
+                "includedUsed": {"val": 0},
+                "onDemandUsed": {"val": 0},
+                "totalUsed": {"val": 0},
+            }
+        ],
+    }
+}
+
+# --- captured 2026-08-18 from cli-chat-proxy.grok.com/v1/billing?format=credits ---
+
+GROK_CREDITS_PAYLOAD = {
+    "config": {
+        "currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-08-18T00:08:17.671111+00:00",
+            "end": "2026-08-25T00:08:17.671111+00:00",
+        },
+        "creditUsagePercent": 1.0,
+        "onDemandCap": {"val": 0},
+        "onDemandUsed": {"val": 0},
+        "productUsage": [{"product": "GrokBuild", "usagePercent": 1.0}],
+        "isUnifiedBillingUser": True,
+        "prepaidBalance": {"val": 0},
+        "topUpMethod": "TOP_UP_METHOD_SAVED_PAYMENT_METHOD",
+        "billingPeriodStart": "2026-08-18T00:08:17.671111+00:00",
+        "billingPeriodEnd": "2026-08-25T00:08:17.671111+00:00",
+    }
+}
+
+GROK_USER_PAYLOAD = {
+    "subscriptionTier": "SuperGrokPlus",
+    "hasGrokCodeAccess": True,
+}
+
+GROK_CREDITS_WITH_PERCENT_PAYLOAD = {
+    "config": {
+        "currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-08-18T00:08:17.671111+00:00",
+            "end": "2026-08-25T00:08:17.671111+00:00",
+        },
+        "creditUsagePercent": 37.5,
+        "onDemandCap": {"val": 80},
+        "onDemandUsed": {"val": 30},
+        "isUnifiedBillingUser": True,
+        "billingPeriodEnd": "2026-08-25T00:08:17.671111+00:00",
+    }
+}
+
+GROK_MONTHLY_WITH_LIMIT_PAYLOAD = {
+    "config": {
+        "monthlyLimit": {"val": 200},
+        "used": {"val": 50},
+        "billingPeriodStart": "2026-08-01T00:00:00+00:00",
+        "billingPeriodEnd": "2026-09-01T00:00:00+00:00",
+    }
+}
 
 ZAI_PAYLOAD = {
     "code": 200,
@@ -439,6 +510,122 @@ def test_zai_normalized_record_has_datetime_reset_at():
 # ---------------------------------------------------------------------------
 # _format_relative unit tests
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Grok Build
+# ---------------------------------------------------------------------------
+
+
+def test_grok_parse_real_payload():
+    from quse.grok_quota import _parse_billing_payloads
+
+    status = _parse_billing_payloads(
+        monthly=GROK_MONTHLY_PAYLOAD,
+        credits=GROK_CREDITS_PAYLOAD,
+        user=GROK_USER_PAYLOAD,
+    )
+
+    assert status.short_term is None
+    assert status.long_term is not None
+    _assert_reset_at_is_datetime(status.long_term.reset_at)
+    assert reset_at_to_iso(status.long_term.reset_at) == "2026-08-25T00:08:17Z"
+    assert status.long_term.percent_remaining == 99.0
+    assert status.long_term.window == "weekly"
+    assert status.subscription == "SuperGrokPlus"
+
+
+def test_grok_json_round_trips_real_payload(monkeypatch):
+    from quse.grok_quota import _parse_billing_payloads
+
+    status = _parse_billing_payloads(
+        monthly=GROK_MONTHLY_PAYLOAD,
+        credits=GROK_CREDITS_PAYLOAD,
+        user=GROK_USER_PAYLOAD,
+    )
+    monkeypatch.setattr("quse.usage.check_grok_quota", lambda: status)
+
+    output = CliRunner().invoke(app, ["grok", "--json"]).output
+    record = json.loads(output)["grok"]
+
+    assert record["short_term"]["percent_remaining"] is None
+    assert record["short_term"]["reset_at"] is None
+    assert record["long_term"]["reset_at"] == "2026-08-25T00:08:17Z"
+    assert record["long_term"]["percent_remaining"] == 99.0
+    assert record["long_term"]["window"] == "weekly"
+    assert record["details"]["subscription"] == "SuperGrokPlus"
+    assert record["details"]["product_usage"] == [
+        {"product": "GrokBuild", "usage_percent": 1.0}
+    ]
+
+
+def test_grok_human_round_trips_real_payload(monkeypatch):
+    _set_utc_tz(monkeypatch)
+    from quse.grok_quota import _parse_billing_payloads
+
+    status = _parse_billing_payloads(
+        monthly=GROK_MONTHLY_PAYLOAD,
+        credits=GROK_CREDITS_PAYLOAD,
+        user=GROK_USER_PAYLOAD,
+    )
+    monkeypatch.setattr("quse.usage.check_grok_quota", lambda: status)
+    _freeze_clock(monkeypatch, datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["grok"]).output
+
+    assert output.strip() == (
+        "subscription: SuperGrokPlus\n"
+        "long_term:\n"
+        "    remaining: 99.0%\n"
+        "    reset: 25-08-2026 00:08 (UTC) / in 6d 12h"
+    )
+
+
+def test_grok_human_round_trips_percent_and_monthly(monkeypatch):
+    _set_utc_tz(monkeypatch)
+    from quse.grok_quota import _parse_billing_payloads
+
+    status = _parse_billing_payloads(
+        monthly=GROK_MONTHLY_WITH_LIMIT_PAYLOAD,
+        credits=GROK_CREDITS_WITH_PERCENT_PAYLOAD,
+        user=GROK_USER_PAYLOAD,
+    )
+    monkeypatch.setattr("quse.usage.check_grok_quota", lambda: status)
+    _freeze_clock(monkeypatch, datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["grok-build"]).output
+
+    assert output.strip() == (
+        "subscription: SuperGrokPlus\n"
+        "short_term:\n"
+        "    remaining: 62.5%\n"
+        "    reset: 25-08-2026 00:08 (UTC) / in 6d 12h\n"
+        "long_term:\n"
+        "    remaining: 75.0%\n"
+        "    reset: 01-09-2026 00:00 (UTC) / in 13d 12h"
+    )
+
+
+def test_grok_normalized_record_has_datetime_reset_at():
+    from quse.grok_quota import _parse_billing_payloads
+
+    import quse.usage
+
+    status = _parse_billing_payloads(
+        monthly=GROK_MONTHLY_PAYLOAD,
+        credits=GROK_CREDITS_PAYLOAD,
+        user=GROK_USER_PAYLOAD,
+    )
+    original = quse.usage.check_grok_quota
+    quse.usage.check_grok_quota = lambda: status
+    try:
+        record = normalize_usage_provider("grok")
+    finally:
+        quse.usage.check_grok_quota = original
+
+    _assert_reset_at_is_datetime(record["short_term"]["reset_at"])
+    _assert_reset_at_is_datetime(record["long_term"]["reset_at"])
+    format_usage_line(record)
 
 
 def test_format_relative_days_and_hours():
