@@ -61,7 +61,22 @@ Provider mapping:
   prefers the `GrokBuild` entry in `productUsage`, then `creditUsagePercent`.
   If no percent is reported, `percent_remaining` is `null` while `reset_at`
   can still be set. Grok JSON output also includes `details.subscription`
-  and `details.product_usage`.
+  and `details.product_usage`. When Grok exposes one-time usage resets,
+  `details.resets` lists their expiry timestamps.
+  The one-time reset RPC is separate from Grok's CLI billing responses. `quse`
+  queries it with the stored OAuth token and uses the local `curl` command for
+  the `grok.com` request because Cloudflare can challenge Python's TLS client.
+  If a deployment requires the browser session, set `GROK_RESET_COOKIE` to the
+  full `Cookie` header from the logged-in `grok.com` browser session and, when
+  needed, set `GROK_RESET_USER_AGENT` to that browser's user agent. Alternatively,
+  point `GROK_RESET_COOKIE_FILE` at a local Cookie-Editor JSON export;
+  `~/.grok/cookies.json` and `~/.grok/browser-cookies.json` are checked
+  automatically. A browser's Network-panel **Copy as cURL** export can be
+  saved via `GROK_RESET_CURL_FILE`; `~/.grok/reset.curl` and
+  `~/.grok/grok-reset.curl` are also checked automatically, including the
+  matching browser user agent. If browser cookies are stored in a `cookies`
+  field in `~/.grok/auth.json`, `quse` uses those too. Do not commit or share
+  these values.
 
 ## Install
 

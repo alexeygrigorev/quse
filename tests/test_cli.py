@@ -9,7 +9,7 @@ from quse.claude_quota import ClaudeQuotaStatus
 from quse.cli import app
 from quse.codex_quota import CodexQuotaStatus, CodexQuotaWindow, CodexResetCredit
 from quse.copilot_quota import CopilotQuotaStatus
-from quse.grok_quota import GrokQuotaStatus, GrokQuotaWindow
+from quse.grok_quota import GrokQuotaStatus, GrokQuotaWindow, GrokReset
 from quse.usage import (
     collect_usage,
     format_usage_line,
@@ -106,6 +106,63 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
         assert (
             "reset_credits:\n    expires: 24-05-2026 15:53 (UTC) / overdue"
         ) in result.stdout
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+
+def test_grok_json_includes_resets(monkeypatch):
+    monkeypatch.setattr(
+        "quse.usage.check_grok_quota",
+        lambda: GrokQuotaStatus(
+            resets=[
+                GrokReset(
+                    token_id="reset-1",
+                    expires_at="2026-09-01T00:00:00Z",
+                )
+            ],
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["grok", "--json"])
+
+    assert result.exit_code == 0
+    details = json.loads(result.stdout)["grok"]["details"]
+    assert details["resets_available"] == 1
+    assert details["resets"] == [
+        {
+            "expires_at": "2026-09-01T00:00:00Z",
+            "token_id": "reset-1",
+        }
+    ]
+
+
+def test_grok_human_usage_shows_resets(monkeypatch):
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "UTC")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    monkeypatch.setattr(
+        "quse.usage.check_grok_quota",
+        lambda: GrokQuotaStatus(
+            resets=[
+                GrokReset(
+                    token_id="reset-1",
+                    expires_at="2026-05-24T15:53:01Z",
+                )
+            ],
+        ),
+    )
+
+    try:
+        result = CliRunner().invoke(app, ["grok"])
+
+        assert result.exit_code == 0
+        assert "resets:\n    expires: 24-05-2026 15:53 (UTC) / overdue" in result.stdout
     finally:
         if original_tz is None:
             monkeypatch.delenv("TZ", raising=False)

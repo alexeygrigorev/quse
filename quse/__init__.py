@@ -13,7 +13,12 @@ from quse.codex_quota import (
     check_codex_quota,
 )
 from quse.copilot_quota import CopilotQuotaStatus, check_copilot_quota
-from quse.grok_quota import GrokQuotaStatus, GrokQuotaWindow, check_grok_quota
+from quse.grok_quota import (
+    GrokQuotaStatus,
+    GrokQuotaWindow,
+    GrokReset,
+    check_grok_quota,
+)
 from quse.usage import (
     SUPPORTED_USAGE_PROVIDERS,
     USAGE_PROVIDER_ALIASES,
@@ -49,6 +54,7 @@ __all__ = [
     "GeminiUsageProvider",
     "GrokQuotaStatus",
     "GrokQuotaWindow",
+    "GrokReset",
     "GrokUsageProvider",
     "SUPPORTED_USAGE_PROVIDERS",
     "USAGE_PROVIDER_ALIASES",

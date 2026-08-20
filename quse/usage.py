@@ -156,6 +156,28 @@ def _format_codex_reset_credit_lines(
     ]
 
 
+def _format_grok_reset_lines(
+    record: dict[str, Any], *, header: bool = True, now: datetime | None = None
+) -> list[str]:
+    if record["provider"] != "grok":
+        return []
+    details = record.get("details")
+    if not isinstance(details, dict):
+        return []
+    resets = details.get("resets")
+    if not isinstance(resets, list) or not resets:
+        return []
+    indent, field_indent = _usage_indents(header)
+    return [
+        f"{indent}resets:",
+        *[
+            f"{field_indent}{_format_grok_reset_body(reset, now=now)}"
+            for reset in resets
+            if isinstance(reset, dict)
+        ],
+    ]
+
+
 def _usage_indents(header: bool) -> tuple[str, str]:
     if header:
         return "    ", "        "
@@ -166,6 +188,22 @@ def _format_codex_reset_credit_body(
     credit: dict[str, Any], *, now: datetime | None = None
 ) -> str:
     expires_at = credit.get("expires_at")
+    formatted = _format_reset_at(expires_at)
+    if formatted == "unknown":
+        return "expires: unknown"
+    if now is not None:
+        current = now
+    else:
+        current = datetime.now(tz=expires_at.tzinfo)
+    return f"expires: {formatted} / {_format_relative(expires_at, current)}"
+
+
+def _format_grok_reset_body(
+    reset: dict[str, Any], *, now: datetime | None = None
+) -> str:
+    expires_at = reset.get("expires_at")
+    if expires_at is None:
+        expires_at = reset.get("validity_end")
     formatted = _format_reset_at(expires_at)
     if formatted == "unknown":
         return "expires: unknown"
@@ -327,6 +365,9 @@ class GrokUsageProvider(UsageProvider):
             "on_demand_cap": status_obj.on_demand_cap,
             "on_demand_used": status_obj.on_demand_used,
             "product_usage": status_obj.product_usage,
+            "resets": [asdict(reset) for reset in status_obj.resets],
+            "resets_available": len(status_obj.available_resets),
+            "resets_error": status_obj.resets_error,
             "windows": {
                 "weekly": asdict(status_obj.weekly),
                 "monthly": asdict(status_obj.monthly),
@@ -412,6 +453,7 @@ def format_usage_line(
             ]
         )
     lines.extend(_format_codex_reset_credit_lines(record, header=header, now=now))
+    lines.extend(_format_grok_reset_lines(record, header=header, now=now))
     if record["error"]:
         lines.append(f"{indent}error: {record['error']}")
     return "\n".join(lines)
