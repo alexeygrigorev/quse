@@ -9,6 +9,7 @@ import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from quse._opencode_auth import read_auth_token
 from quse._shared import UsageWindow, normalize_reset_at
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class ZaiQuotaWindow:
     remaining: int | None = None
     limit: int | None = None
     reset_at: datetime | None = None
+    present: bool = True
 
     def __post_init__(self) -> None:
         self.used_percent = float(self.used_percent)
@@ -81,9 +83,11 @@ class ZaiQuotaStatus:
         checked_at: float = 0.0,
         error: str | None = None,
     ) -> None:
-        self.five_hour = five_hour or api_calls or ZaiQuotaWindow()
-        self.weekly = weekly or tokens or ZaiQuotaWindow()
-        self.monthly_web_search = monthly_web_search or ZaiQuotaWindow()
+        self.five_hour = five_hour or api_calls or ZaiQuotaWindow(present=False)
+        self.weekly = weekly or tokens or ZaiQuotaWindow(present=False)
+        self.monthly_web_search = monthly_web_search or ZaiQuotaWindow(
+            present=False
+        )
         self.limit_reached = limit_reached
         self.checked_at = checked_at
         self.error = error
@@ -106,6 +110,7 @@ class ZaiQuotaStatus:
             percent_remaining=self.five_hour.percent_remaining,
             reset_at=self.five_hour.reset_at,
             window="5h",
+            rolling=True,
         )
 
     @property
@@ -121,6 +126,11 @@ _cached_status: ZaiQuotaStatus | None = None
 
 
 def _read_zai_config(config_path: Path | None = None) -> ZaiConfig:
+    if config_path is None:
+        token = read_auth_token("zai-coding-plan")
+        if token is not None:
+            return ZaiConfig(token=token)
+
     path = _DEFAULT_CONFIG_PATH
     if config_path is not None:
         path = config_path
@@ -157,9 +167,9 @@ def _fetch_quota_limit(config: ZaiConfig) -> dict:
 
 
 def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
-    five_hour = ZaiQuotaWindow()
-    weekly = ZaiQuotaWindow()
-    monthly_web_search = ZaiQuotaWindow()
+    five_hour = ZaiQuotaWindow(present=False)
+    weekly = ZaiQuotaWindow(present=False)
+    monthly_web_search = ZaiQuotaWindow(present=False)
     found_five_hour = False
     found_weekly = False
 
@@ -186,18 +196,23 @@ def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
             window.window_hours = 5
             window.reset_at = None
             five_hour = window
+            five_hour.present = True
             found_five_hour = True
         elif limit_type == "TOKENS_LIMIT" and unit == 6:
             window.window_hours = None
             weekly = window
+            weekly.present = True
             found_weekly = True
         elif limit_type == "TIME_LIMIT" and unit == 5:
             monthly_web_search = window
+            monthly_web_search.present = True
         elif limit_type == "TIME_LIMIT" and not found_five_hour:
             five_hour = window
+            five_hour.present = True
             found_five_hour = True
         elif limit_type == "TOKENS_LIMIT" and not found_weekly:
             weekly = window
+            weekly.present = True
             found_weekly = True
 
     return ZaiQuotaStatus(

@@ -277,8 +277,19 @@ def test_codex_json_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["codex", "--json"]).output
     record = json.loads(output)["codex"]
 
-    assert record["short_term"]["reset_at"] == "2026-07-08T01:48:23Z"
-    assert record["long_term"]["reset_at"] == "2026-07-11T06:23:55Z"
+    assert record["windows"]["5h"] == {
+        "percent_remaining": 100.0,
+        "reset_at": "2026-07-08T01:48:23Z",
+        "rolling": False,
+    }
+    assert record["windows"]["7d"] == {
+        "percent_remaining": 2.0,
+        "reset_at": "2026-07-11T06:23:55Z",
+    }
+    assert record["windows"]["monthly"] == {
+        "percent_remaining": None,
+        "reset_at": None,
+    }
     assert record["details"]["reset_credits_available"] == 2
     assert record["details"]["reset_credits"][0]["expires_at"] == (
         "2026-07-26T23:52:15Z"
@@ -300,10 +311,10 @@ def test_codex_human_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["codex"]).output
 
     assert output.strip() == (
-        "short_term:\n"
+        "5h:\n"
         "    remaining: 100.0%\n"
         "    reset: 08-07-2026 01:48 (UTC) / in 13h\n"
-        "long_term:\n"
+        "7d:\n"
         "    remaining: 2.0%\n"
         "    reset: 11-07-2026 06:23 (UTC) / in 3d 18h\n"
         "reset_credits:\n"
@@ -340,8 +351,8 @@ def test_claude_json_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["claude", "--json"]).output
     record = json.loads(output)["claude"]
 
-    assert record["short_term"]["reset_at"] == "2026-07-07T23:19:59Z"
-    assert record["long_term"]["reset_at"] == "2026-07-09T14:59:59Z"
+    assert record["windows"]["5h"]["reset_at"] == "2026-07-07T23:19:59Z"
+    assert record["windows"]["7d"]["reset_at"] == "2026-07-09T14:59:59Z"
 
 
 def test_claude_human_round_trips_real_payload(monkeypatch):
@@ -355,10 +366,10 @@ def test_claude_human_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["claude"]).output
 
     assert output.strip() == (
-        "short_term:\n"
+        "5h:\n"
         "    remaining: 62.0%\n"
         "    reset: 07-07-2026 23:19 (UTC) / in 11h\n"
-        "long_term:\n"
+        "7d:\n"
         "    remaining: 24.0%\n"
         "    reset: 09-07-2026 14:59 (UTC) / in 2d 2h"
     )
@@ -405,8 +416,8 @@ def test_copilot_json_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["copilot", "--json"]).output
     record = json.loads(output)["copilot"]
 
-    assert record["long_term"]["reset_at"] == "2026-08-01T00:00:00Z"
-    assert record["long_term"]["percent_remaining"] == 97.1
+    assert record["windows"]["monthly"]["reset_at"] == "2026-08-01T00:00:00Z"
+    assert record["windows"]["monthly"]["percent_remaining"] == 97.1
 
 
 def test_copilot_human_round_trips_real_payload(monkeypatch):
@@ -420,10 +431,7 @@ def test_copilot_human_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["copilot"]).output
 
     assert output.strip() == (
-        "short_term:\n"
-        "    remaining: 100.0%\n"
-        "    reset: unknown\n"
-        "long_term:\n"
+        "monthly:\n"
         "    remaining: 97.1%\n"
         "    reset: 01-08-2026 00:00 (UTC) / in 24d 12h"
     )
@@ -459,10 +467,19 @@ def test_zai_json_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["zai", "--json"]).output
     record = json.loads(output)["zai"]
 
-    assert record["short_term"]["reset_at"] is None
-    assert record["long_term"]["reset_at"] == "2026-07-11T14:04:58Z"
-    assert record["short_term"]["percent_remaining"] == 53.0
-    assert record["long_term"]["percent_remaining"] == 55.0
+    assert record["windows"]["5h"] == {
+        "percent_remaining": 53.0,
+        "reset_at": None,
+        "rolling": True,
+    }
+    assert record["windows"]["7d"] == {
+        "percent_remaining": 55.0,
+        "reset_at": "2026-07-11T14:04:58Z",
+    }
+    assert record["windows"]["monthly"] == {
+        "percent_remaining": None,
+        "reset_at": None,
+    }
 
 
 def test_zai_human_round_trips_real_payload(monkeypatch):
@@ -478,10 +495,10 @@ def test_zai_human_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["zai"]).output
 
     assert output.strip() == (
-        "short_term:\n"
+        "5h:\n"
         "    remaining: 53.0%\n"
         "    reset: rolling 5h\n"
-        "long_term:\n"
+        "7d:\n"
         "    remaining: 55.0%\n"
         "    reset: 11-07-2026 14:04 (UTC) / in 4d 2h"
     )
@@ -502,8 +519,9 @@ def test_zai_normalized_record_has_datetime_reset_at():
     finally:
         quse.usage.check_zai_quota = original
 
-    _assert_reset_at_is_datetime(record["short_term"]["reset_at"])
-    _assert_reset_at_is_datetime(record["long_term"]["reset_at"])
+    _assert_reset_at_is_datetime(record["windows"]["5h"]["reset_at"])
+    _assert_reset_at_is_datetime(record["windows"]["7d"]["reset_at"])
+    assert record["windows"]["monthly"]["reset_at"] is None
     format_usage_line(record)
 
 
@@ -548,12 +566,14 @@ def test_grok_json_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["grok", "--json"]).output
     record = json.loads(output)["grok"]
 
-    assert record["short_term"]["percent_remaining"] is None
-    assert record["short_term"]["reset_at"] is None
-    assert record["long_term"]["reset_at"] == "2026-08-25T00:08:17Z"
-    assert record["long_term"]["percent_remaining"] == 99.0
-    assert record["long_term"]["window"] == "weekly"
-    assert record["details"]["subscription"] == "SuperGrokPlus"
+    assert record["windows"]["5h"] == {
+        "percent_remaining": None,
+        "reset_at": None,
+        "rolling": False,
+    }
+    assert record["windows"]["7d"]["reset_at"] == "2026-08-25T00:08:17Z"
+    assert record["windows"]["7d"]["percent_remaining"] == 99.0
+    assert "subscription" not in record["details"]
     assert record["details"]["product_usage"] == [
         {"product": "GrokBuild", "usage_percent": 1.0}
     ]
@@ -574,8 +594,7 @@ def test_grok_human_round_trips_real_payload(monkeypatch):
     output = CliRunner().invoke(app, ["grok"]).output
 
     assert output.strip() == (
-        "subscription: SuperGrokPlus\n"
-        "long_term:\n"
+        "7d:\n"
         "    remaining: 99.0%\n"
         "    reset: 25-08-2026 00:08 (UTC) / in 6d 12h"
     )
@@ -596,11 +615,10 @@ def test_grok_human_round_trips_percent_and_monthly(monkeypatch):
     output = CliRunner().invoke(app, ["grok-build"]).output
 
     assert output.strip() == (
-        "subscription: SuperGrokPlus\n"
-        "short_term:\n"
+        "7d:\n"
         "    remaining: 62.5%\n"
         "    reset: 25-08-2026 00:08 (UTC) / in 6d 12h\n"
-        "long_term:\n"
+        "monthly:\n"
         "    remaining: 75.0%\n"
         "    reset: 01-09-2026 00:00 (UTC) / in 13d 12h"
     )
@@ -623,8 +641,8 @@ def test_grok_normalized_record_has_datetime_reset_at():
     finally:
         quse.usage.check_grok_quota = original
 
-    _assert_reset_at_is_datetime(record["short_term"]["reset_at"])
-    _assert_reset_at_is_datetime(record["long_term"]["reset_at"])
+    _assert_reset_at_is_datetime(record["windows"]["7d"]["reset_at"])
+    _assert_reset_at_is_datetime(record["windows"]["monthly"]["reset_at"])
     format_usage_line(record)
 
 

@@ -19,7 +19,13 @@ from quse.grok_quota import (
     GrokReset,
     check_grok_quota,
 )
+from quse.opencode_go_quota import (
+    OpenCodeGoQuotaStatus,
+    OpenCodeGoQuotaWindow,
+    check_opencode_go_quota,
+)
 from quse.usage import (
+    CANONICAL_WINDOWS,
     SUPPORTED_USAGE_PROVIDERS,
     USAGE_PROVIDER_ALIASES,
     USAGE_PROVIDER_CHOICES,
@@ -27,6 +33,7 @@ from quse.usage import (
     CodexUsageProvider,
     CopilotUsageProvider,
     GeminiUsageProvider,
+    GoUsageProvider,
     GrokUsageProvider,
     UnknownProviderError,
     UsageProvider,
@@ -56,6 +63,10 @@ __all__ = [
     "GrokQuotaWindow",
     "GrokReset",
     "GrokUsageProvider",
+    "CANONICAL_WINDOWS",
+    "GoUsageProvider",
+    "OpenCodeGoQuotaStatus",
+    "OpenCodeGoQuotaWindow",
     "SUPPORTED_USAGE_PROVIDERS",
     "USAGE_PROVIDER_ALIASES",
     "USAGE_PROVIDER_CHOICES",
@@ -70,6 +81,7 @@ __all__ = [
     "check_codex_quota",
     "check_copilot_quota",
     "check_grok_quota",
+    "check_opencode_go_quota",
     "check_zai_quota",
     "collect_usage",
     "format_usage_line",

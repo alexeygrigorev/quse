@@ -15,13 +15,14 @@ class UsageWindow:
     # consumers never re-parse a string. Serialized to ISO-8601 UTC at the JSON
     # boundary via [reset_at_to_iso].
     reset_at: datetime | None = None
-    # Concrete span label for this window (``5h`` / ``7d`` / ``weekly`` /
-    # ``monthly`` / ...). Carried on the unified record so every consumer —
-    # the human formatter, the JSON payload, and downstream clients — renders
-    # the same span without re-deriving it from the provider-specific
-    # ``details`` blob. ``None`` for windows with no meaningful fixed span
-    # (e.g. Copilot's fixed short-term bucket).
+    # Provider-native span label used inside adapters and diagnostics
+    # (``5h`` / ``7d`` / ``weekly`` / ``monthly`` / ...). The final display
+    # schema uses the canonical map keys instead, so this is not serialized as
+    # a separate field. ``None`` for windows with no meaningful fixed span.
     window: str | None = None
+    # True only when the provider explicitly identifies this window as rolling.
+    # The normalized display contract currently exposes this on the 5h window.
+    rolling: bool = False
 
     @property
     def used_percent(self) -> float:

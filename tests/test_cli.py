@@ -40,15 +40,20 @@ def test_usage_single_provider_json(monkeypatch):
     record = json.loads(result.stdout)
     assert set(record) == {"codex"}
     assert record["codex"]["status"] == "ok"
-    assert record["codex"]["short_term"] == {
-        "percent_remaining": 60.0,
-        "reset_at": "2026-04-30T00:00:00Z",
-        "window": "5h",
-    }
-    assert record["codex"]["long_term"] == {
-        "percent_remaining": 75.0,
-        "reset_at": "2026-05-01T00:00:00Z",
-        "window": "7d",
+    assert record["codex"]["windows"] == {
+        "5h": {
+            "percent_remaining": 60.0,
+            "reset_at": "2026-04-30T00:00:00Z",
+            "rolling": False,
+        },
+        "7d": {
+            "percent_remaining": 75.0,
+            "reset_at": "2026-05-01T00:00:00Z",
+        },
+        "monthly": {
+            "percent_remaining": None,
+            "reset_at": None,
+        },
     }
     assert result.stdout.startswith("{\n  ")
 
@@ -188,7 +193,7 @@ def test_codex_human_usage_omits_absent_short_term_window(monkeypatch):
 
     assert result.exit_code == 0
     assert result.stdout == (
-        "long_term:\n"
+        "7d:\n"
         "    remaining: 10.0%\n"
         "    reset: unknown\n"
     )
@@ -212,27 +217,34 @@ def test_usage_all_providers_json_is_keyed_by_provider(monkeypatch):
 
 
 def test_usage_window_record_unified_schema():
-    """Every provider record has the SAME unified shape; each window carries a
-    span label. This is the single schema downstream reads — no provider-specific
-    branching required of consumers."""
+    """Every provider record has the same canonical three-window shape."""
     record = usage_window_record(
         provider="claude",
         status="ok",
-        short_term=UsageWindow(percent_remaining=90.0, window="5h"),
-        long_term=UsageWindow(percent_remaining=80.0, window="7d"),
+        windows={
+            "5h": UsageWindow(percent_remaining=90.0),
+            "7d": UsageWindow(percent_remaining=80.0),
+        },
     )
     assert set(record) == {
         "provider",
         "status",
-        "short_term",
-        "long_term",
+        "windows",
         "error",
         "details",
     }
-    assert set(record["short_term"]) == {"percent_remaining", "reset_at", "window"}
-    assert set(record["long_term"]) == {"percent_remaining", "reset_at", "window"}
-    assert record["short_term"]["window"] == "5h"
-    assert record["long_term"]["window"] == "7d"
+    assert set(record["windows"]) == {"5h", "7d", "monthly"}
+    assert set(record["windows"]["5h"]) == {
+        "percent_remaining",
+        "reset_at",
+        "rolling",
+    }
+    assert set(record["windows"]["7d"]) == {"percent_remaining", "reset_at"}
+    assert set(record["windows"]["monthly"]) == {
+        "percent_remaining",
+        "reset_at",
+    }
+    assert record["windows"]["5h"]["rolling"] is False
 
 
 def test_provider_window_span_labels_are_authoritative():
@@ -284,15 +296,42 @@ def test_zai_usage_handles_missing_limit_values(monkeypatch):
 
     record = normalize_usage_provider("zai")
 
-    assert record["short_term"] == {
-        "percent_remaining": 100.0,
-        "reset_at": None,
-        "window": "5h",
+    assert record["windows"] == {
+        "5h": {
+            "percent_remaining": None,
+            "reset_at": None,
+            "rolling": False,
+        },
+        "7d": {
+            "percent_remaining": None,
+            "reset_at": None,
+        },
+        "monthly": {
+            "percent_remaining": None,
+            "reset_at": None,
+        },
     }
-    assert record["long_term"] == {
+
+
+def test_zai_usage_marks_five_hour_window_as_rolling(monkeypatch):
+    monkeypatch.setattr(
+        "quse.usage.check_zai_quota",
+        lambda: ZaiQuotaStatus(
+            five_hour=ZaiQuotaWindow(used_percent=0, window_hours=5),
+            weekly=ZaiQuotaWindow(used_percent=0),
+        ),
+    )
+
+    record = normalize_usage_provider("zai")
+
+    assert record["windows"]["5h"] == {
         "percent_remaining": 100.0,
         "reset_at": None,
-        "window": "weekly",
+        "rolling": True,
+    }
+    assert record["windows"]["7d"] == {
+        "percent_remaining": 100.0,
+        "reset_at": None,
     }
 
 
@@ -309,12 +348,12 @@ def test_zai_human_usage_shows_rolling_windows(monkeypatch):
 
     assert format_usage_line(record) == (
         "zai:\n"
-        "    short_term:\n"
+        "    5h:\n"
         "        remaining: 100.0%\n"
         "        reset: rolling 5h\n"
-        "    long_term:\n"
+        "    7d:\n"
         "        remaining: 100.0%\n"
-        "        reset: weekly"
+        "        reset: unknown"
     )
 
 
@@ -332,13 +371,21 @@ def test_collect_usage_without_provider_runs_checks_in_parallel(monkeypatch):
     records = collect_usage()
     elapsed = time.monotonic() - started_at
 
-    assert sorted(calls) == ["claude", "codex", "copilot", "grok", "zai"]
+    assert sorted(calls) == [
+        "claude",
+        "codex",
+        "copilot",
+        "go",
+        "grok",
+        "zai",
+    ]
     assert records == [
         {"provider": "codex"},
         {"provider": "claude"},
         {"provider": "zai"},
         {"provider": "copilot"},
         {"provider": "grok"},
+        {"provider": "go"},
     ]
     assert elapsed < 0.25
 
@@ -367,10 +414,10 @@ def test_human_usage_line_uses_normalized_windows(monkeypatch):
 
         assert result.exit_code == 0
         assert result.stdout.strip() == (
-            "short_term:\n"
+            "5h:\n"
             "    remaining: 60.0%\n"
             "    reset: 30-04-2026 00:00 (UTC) / overdue\n"
-            "long_term:\n"
+            "7d:\n"
             "    remaining: 75.0%\n"
             "    reset: 01-05-2026 00:00 (UTC) / overdue"
         )

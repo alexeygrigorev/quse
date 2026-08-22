@@ -3,7 +3,7 @@
 Quota and usage checks for coding-agent CLIs.
 
 `quse` reports normalized usage for providers used by tools such as Codex,
-Claude Code, GitHub Copilot, Grok Build, and Z.AI/goz.
+Claude Code, GitHub Copilot, Grok Build, Z.AI, and OpenCode Go.
 
 ```bash
 quse
@@ -19,15 +19,22 @@ same normalized records as JSON keyed by provider name:
   "claude": {
     "details": {},
     "error": null,
-    "long_term": {
-      "percent_remaining": 87.0,
-      "reset_at": "2026-05-28T14:59:59Z"
-    },
-    "short_term": {
-      "percent_remaining": 55.0,
-      "reset_at": "2026-05-24T14:30:00Z"
-    },
-    "status": "ok"
+    "status": "ok",
+    "windows": {
+      "5h": {
+        "percent_remaining": 55.0,
+        "reset_at": "2026-05-24T14:30:00Z",
+        "rolling": false
+      },
+      "7d": {
+        "percent_remaining": 87.0,
+        "reset_at": "2026-05-28T14:59:59Z"
+      },
+      "monthly": {
+        "percent_remaining": null,
+        "reset_at": null
+      }
+    }
   }
 }
 ```
@@ -39,30 +46,35 @@ Supported providers:
 - `zai`
 - `copilot`
 - `grok` (alias: `grok-build`)
+- `go`
 
 `gemini` is accepted and reports `unsupported` because it does not currently
 expose a usage endpoint.
 
 Provider mapping:
 
-- `codex`: two API windows map to the 5-hour `short_term` window and weekly
-  `long_term` window; when the API returns one window, it is weekly only.
+- Every provider has the same normalized `windows.5h`, `windows.7d`, and
+  `windows.monthly` records. An unavailable window has `null` values. The
+  `rolling` field is present on `5h`; if a provider does not identify the
+  window as rolling, it is `false`.
+- `codex`: API windows map to `5h` and `7d`; when the API returns one window,
+  it is `7d` only.
   Codex JSON output also includes `details.reset_credits` from ChatGPT's
   rate-limit reset-credit endpoint when available.
-- `claude`: `short_term` maps to the 5-hour signal, `long_term` maps to the
-  7-day signal.
-- `copilot`: `short_term` is hardcoded to `100%` remaining, `long_term` maps to
-  the monthly premium-interactions signal.
-- `zai`: `short_term` maps to the 5-hour quota, `long_term` maps to the
-  weekly quota.
+- `claude`: the API's short and long signals map to `5h` and `7d`.
+- `copilot`: the monthly premium-interactions signal maps to `monthly`.
+- `zai`: the five-hour quota maps to rolling `5h` and the token quota maps to
+  `7d`; its `monthly` window is unavailable.
+- `go`: OpenCode Go's rolling and weekly API windows map to `5h` and `7d`, and
+  its monthly API window maps to `monthly`.
 - `grok`: the weekly SuperGrok / X Premium window and the monthly credit
-  window map to `short_term` and `long_term` when both are present; when the
-  API returns one window, it is reported as `long_term`. Weekly remaining
+  window map to `7d` and `monthly` when both are present. When the API returns
+  one window, it is assigned to `7d`. Weekly remaining
   prefers the `GrokBuild` entry in `productUsage`, then `creditUsagePercent`.
   If no percent is reported, `percent_remaining` is `null` while `reset_at`
-  can still be set. Grok JSON output also includes `details.subscription`
-  and `details.product_usage`. When Grok exposes one-time usage resets,
-  `details.resets` lists their expiry timestamps.
+  can still be set. Grok JSON output includes `details.product_usage`. When
+  Grok exposes one-time usage resets, `details.resets` lists their expiry
+  timestamps.
   The one-time reset RPC is separate from Grok's CLI billing responses. `quse`
   queries it with the stored OAuth token and uses the local `curl` command for
   the `grok.com` request because Cloudflare can challenge Python's TLS client.
@@ -77,6 +89,17 @@ Provider mapping:
   matching browser user agent. If browser cookies are stored in a `cookies`
   field in `~/.grok/auth.json`, `quse` uses those too. Do not commit or share
   these values.
+
+Z.AI credentials are resolved in this order:
+
+1. The OpenCode auth file at `~/.local/share/opencode/auth.json`, using the
+   `zai-coding-plan` entry.
+2. The legacy goz config at `~/.config/goz/config.json`, using `zai_token`.
+
+OpenCode Go uses the same OpenCode auth file and the `opencode-go` entry. Run
+`/connect` in OpenCode, choose `OpenCode Go`, and paste the key from
+`opencode.ai/auth`; Quse will reuse that stored key. For a separately managed
+key, set `OPENCODE_GO_API_KEY`. Do not commit or share these values.
 
 ## Install
 

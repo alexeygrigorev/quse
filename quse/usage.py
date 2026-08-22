@@ -8,11 +8,16 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, TypeAlias
 
+from quse._shared import UsageWindow
 from quse.claude_quota import check_claude_quota
 from quse.codex_quota import check_codex_quota
 from quse.copilot_quota import check_copilot_quota
 from quse.grok_quota import check_grok_quota
+from quse.opencode_go_quota import check_opencode_go_quota
 from quse.zai_quota import check_zai_quota
+
+
+CANONICAL_WINDOWS = ("5h", "7d", "monthly")
 
 
 class UnknownProviderError(ValueError):
@@ -24,21 +29,28 @@ def usage_provider_error_message(name: str) -> str:
     return f"Unknown provider '{name}'. Valid provider names: {valid_names}."
 
 
-def _window_record(window: Any) -> dict[str, Any]:
+def _window_record(window: Any, *, name: str) -> dict[str, Any]:
     if window is None:
-        return {"percent_remaining": None, "reset_at": None, "window": None}
-    remaining = window.percent_remaining
+        remaining = None
+        reset_at = None
+        rolling = False
+    else:
+        remaining = window.percent_remaining
+        reset_at = window.reset_at
+        rolling = bool(getattr(window, "rolling", False))
     if remaining is None:
         percent = None
     else:
         percent = round(float(remaining), 2)
-    return {
+    record = {
         "percent_remaining": percent,
         # A real ``datetime`` (or ``None``) — the JSON boundary serializes it to
         # ISO-8601 UTC; the human formatter renders it directly.
-        "reset_at": window.reset_at,
-        "window": window.window,
+        "reset_at": reset_at,
     }
+    if name == "5h":
+        record["rolling"] = rolling
+    return record
 
 
 def _format_reset_at(value: datetime | None) -> str:
@@ -73,33 +85,12 @@ def _format_relative(value: datetime, now: datetime) -> str:
     return "in " + " ".join(parts)
 
 
-def _format_window_hours(value: Any) -> str | None:
-    if isinstance(value, int):
-        return f"rolling {value}h"
-    return None
-
-
-def _zai_rolling_window(record: dict[str, Any], term: str) -> str | None:
-    if record["provider"] != "zai":
-        return None
-    windows = record["details"].get("windows")
-    if not isinstance(windows, dict):
-        return None
-    window_key = "weekly"
-    if term == "short_term":
-        window_key = "five_hour"
-    window = windows.get(window_key)
-    if not isinstance(window, dict):
-        return None
-    if window_key == "weekly" and window.get("window_hours") is None:
-        return "weekly"
-    return _format_window_hours(window.get("window_hours"))
-
-
 def _format_reset_or_window(
-    record: dict[str, Any], term: str, *, now: datetime | None = None
+    name: str,
+    window: dict[str, Any],
+    *,
+    now: datetime | None = None,
 ) -> str:
-    window = record[term]
     reset_at = _format_reset_at(window["reset_at"])
     if reset_at != "unknown":
         if now is not None:
@@ -107,9 +98,8 @@ def _format_reset_or_window(
         else:
             current = datetime.now(tz=window["reset_at"].tzinfo)
         return f"{reset_at} / {_format_relative(window['reset_at'], current)}"
-    rolling_window = _zai_rolling_window(record, term)
-    if rolling_window is not None:
-        return rolling_window
+    if name == "5h" and window.get("rolling", False):
+        return "rolling 5h"
     return reset_at
 
 
@@ -117,21 +107,6 @@ def _format_percent(value: float | int | None) -> str:
     if value is None:
         return "unknown"
     return f"{value}%"
-
-
-def _format_grok_subscription_lines(
-    record: dict[str, Any], *, header: bool = True
-) -> list[str]:
-    if record["provider"] != "grok":
-        return []
-    details = record.get("details")
-    if not isinstance(details, dict):
-        return []
-    subscription = details.get("subscription")
-    if not isinstance(subscription, str) or not subscription:
-        return []
-    indent, _field_indent = _usage_indents(header)
-    return [f"{indent}subscription: {subscription}"]
 
 
 def _format_codex_reset_credit_lines(
@@ -214,20 +189,34 @@ def _format_grok_reset_body(
     return f"expires: {formatted} / {_format_relative(expires_at, current)}"
 
 
+def _format_windows(record: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    windows = record.get("windows")
+    if isinstance(windows, dict):
+        return [
+            (name, windows[name])
+            for name in CANONICAL_WINDOWS
+            if isinstance(windows.get(name), dict)
+        ]
+    return []
+
+
 def usage_window_record(
     *,
     provider: str,
     status: str,
-    short_term: Any,
-    long_term: Any,
+    windows: dict[str, Any] | None,
     error: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if windows is None:
+        windows = {}
     return {
         "provider": provider,
         "status": status,
-        "short_term": _window_record(short_term),
-        "long_term": _window_record(long_term),
+        "windows": {
+            name: _window_record(windows.get(name), name=name)
+            for name in CANONICAL_WINDOWS
+        },
         "error": error,
         "details": details or {},
     }
@@ -242,17 +231,18 @@ class UsageProvider(ABC):
             return usage_window_record(
                 provider=self.name,
                 status="unsupported",
-                short_term=None,
-                long_term=None,
+                windows={},
                 error="unsupported",
             )
 
         status_obj = self.check_status()
+        windows = {}
+        if not status_obj.error:
+            windows = self.windows(status_obj)
         return usage_window_record(
             provider=self.name,
             status=self.status_label(status_obj),
-            short_term=self.short_term_window(status_obj),
-            long_term=self.long_term_window(status_obj),
+            windows=windows,
             error=status_obj.error,
             details=self.details(status_obj),
         )
@@ -269,15 +259,21 @@ class UsageProvider(ABC):
             return "error"
         return "ok"
 
-    def short_term_window(self, status_obj: Any) -> Any:
-        if status_obj.error:
-            return None
-        return status_obj.short_term
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {}
 
-    def long_term_window(self, status_obj: Any) -> Any:
-        if status_obj.error:
-            return None
-        return status_obj.long_term
+
+def _as_usage_window(
+    window: Any, *, label: str, rolling: bool = False
+) -> UsageWindow | None:
+    if window is None or not getattr(window, "present", True):
+        return None
+    return UsageWindow(
+        percent_remaining=window.percent_remaining,
+        reset_at=window.reset_at,
+        window=label,
+        rolling=rolling,
+    )
 
 
 class CodexUsageProvider(UsageProvider):
@@ -285,6 +281,13 @@ class CodexUsageProvider(UsageProvider):
 
     def check_status(self) -> Any:
         return check_codex_quota()
+
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "5h": status_obj.short_term,
+            "7d": status_obj.long_term,
+            "monthly": None,
+        }
 
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
@@ -305,6 +308,13 @@ class ClaudeUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         return check_claude_quota()
 
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "5h": status_obj.short_term,
+            "7d": status_obj.long_term,
+            "monthly": None,
+        }
+
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "limit_reached": status_obj.limit_reached,
@@ -322,6 +332,13 @@ class CopilotUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         return check_copilot_quota()
 
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "5h": None,
+            "7d": None,
+            "monthly": status_obj.long_term,
+        }
+
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "premium_percent_remaining": status_obj.premium_percent_remaining,
@@ -337,6 +354,15 @@ class ZaiUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         return check_zai_quota()
 
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "5h": _as_usage_window(
+                status_obj.five_hour, label="5h", rolling=True
+            ),
+            "7d": _as_usage_window(status_obj.weekly, label="7d"),
+            "monthly": None,
+        }
+
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "limit_reached": status_obj.limit_reached,
@@ -344,7 +370,6 @@ class ZaiUsageProvider(UsageProvider):
             "windows": {
                 "five_hour": asdict(status_obj.five_hour),
                 "weekly": asdict(status_obj.weekly),
-                "monthly_web_search": asdict(status_obj.monthly_web_search),
             },
         }
 
@@ -355,10 +380,16 @@ class GrokUsageProvider(UsageProvider):
     def check_status(self) -> Any:
         return check_grok_quota()
 
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "5h": None,
+            "7d": _as_usage_window(status_obj.weekly, label="7d"),
+            "monthly": _as_usage_window(status_obj.monthly, label="monthly"),
+        }
+
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "limit_reached": status_obj.limit_reached,
-            "subscription": status_obj.subscription,
             "has_grok_code_access": status_obj.has_grok_code_access,
             "is_unified_billing_user": status_obj.is_unified_billing_user,
             "prepaid_balance": status_obj.prepaid_balance,
@@ -372,6 +403,26 @@ class GrokUsageProvider(UsageProvider):
                 "weekly": asdict(status_obj.weekly),
                 "monthly": asdict(status_obj.monthly),
             },
+        }
+
+
+class GoUsageProvider(UsageProvider):
+    name = "go"
+
+    def check_status(self) -> Any:
+        return check_opencode_go_quota()
+
+    def windows(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "5h": status_obj.short_term,
+            "7d": _as_usage_window(status_obj.weekly, label="7d"),
+            "monthly": _as_usage_window(status_obj.monthly, label="monthly"),
+        }
+
+    def details(self, status_obj: Any) -> dict[str, Any]:
+        return {
+            "limit_reached": status_obj.limit_reached,
+            "max_used_percent": status_obj.max_used_percent,
         }
 
 
@@ -392,6 +443,7 @@ USAGE_PROVIDER_CLASSES: tuple[UsageProviderClass, ...] = (
     ZaiUsageProvider,
     CopilotUsageProvider,
     GrokUsageProvider,
+    GoUsageProvider,
     GeminiUsageProvider,
 )
 USAGE_PROVIDER_ALIASES = {
@@ -434,22 +486,17 @@ def format_usage_line(
     lines: list[str] = []
     if header:
         lines.append(f"{record['provider']}:")
-    lines.extend(_format_grok_subscription_lines(record, header=header))
-    for term in ("short_term", "long_term"):
-        window = record[term]
+    for term, window in _format_windows(record):
         # Keep the normalized JSON shape stable, but do not print a
         # nonexistent human-facing row when a provider omits a window.
-        if record["status"] == "ok" and all(
-            window[key] is None
-            for key in ("percent_remaining", "reset_at", "window")
-        ):
+        if window["percent_remaining"] is None and window["reset_at"] is None:
             continue
         usage = _format_percent(window["percent_remaining"])
         lines.extend(
             [
                 f"{indent}{term}:",
                 f"{field_indent}remaining: {usage}",
-                f"{field_indent}reset: {_format_reset_or_window(record, term, now=now)}",
+                f"{field_indent}reset: {_format_reset_or_window(term, window, now=now)}",
             ]
         )
     lines.extend(_format_codex_reset_credit_lines(record, header=header, now=now))
