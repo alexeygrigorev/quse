@@ -3,8 +3,7 @@ revision = 3
 requires-python = ">=3.11"
 
 [options]
-exclude-newer = "2026-05-17T14:07:30.340337623Z"
-exclude-newer-span = "P7D"
+exclude-newer = "2026-08-25T22:00:00Z"
 
 [[package]]
 name = "anyio"
@@ -579,7 +578,7 @@ wheels = [
 
 [[package]]
 name = "quse"
-version = "0.0.12"
+version = "0.0.14"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
