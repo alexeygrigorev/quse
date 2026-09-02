@@ -337,6 +337,8 @@ def _weekly_used_percent(
     if product_percent is not None:
         return product_percent
     reported = config.get("creditUsagePercent")
+    if reported is None:
+        reported = config.get("credit_usage_percent")
     if isinstance(reported, bool):
         reported = None
     if isinstance(reported, (int, float)):
@@ -371,6 +373,10 @@ def _parse_weekly_window(
     is_weekly = period_type == "USAGE_PERIOD_TYPE_WEEKLY"
     if not is_weekly and used_percent is None:
         return GrokQuotaWindow(present=False)
+    if used_percent is None and is_weekly:
+        # Proto3 JSON/gRPC omit the default 0.0 float. A weekly period with no
+        # reported percent, GrokBuild share, or on-demand cap is 0% used.
+        used_percent = 0.0
     if period_end is None:
         period_end = config.get("billingPeriodEnd")
     return GrokQuotaWindow(

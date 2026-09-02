@@ -180,7 +180,7 @@ def test_reset_cookie_from_file_accepts_curl_export(
     assert grok_quota._reset_user_agent_from_file() == "Browser/1.0"
 
 
-def test_parse_weekly_credits_without_numeric_quota() -> None:
+def test_parse_weekly_credits_omitted_percent_is_zero_used() -> None:
     status = grok_quota._parse_billing_payloads(
         monthly={
             "config": {
@@ -207,11 +207,27 @@ def test_parse_weekly_credits_without_numeric_quota() -> None:
     assert status.short_term is None
     assert status.long_term is not None
     assert status.long_term.window == "weekly"
-    assert status.long_term.percent_remaining is None
+    assert status.long_term.percent_remaining == 100.0
     assert reset_at_to_iso(status.long_term.reset_at) == "2026-08-25T00:08:17Z"
     assert status.subscription == "SuperGrokPlus"
     assert status.has_grok_code_access is True
     assert status.limit_reached is False
+
+
+def test_parse_weekly_credits_snake_case_percent() -> None:
+    status = grok_quota._parse_billing_payloads(
+        monthly={"config": {"monthlyLimit": {"val": 0}}},
+        credits={
+            "config": {
+                "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"},
+                "credit_usage_percent": 25,
+                "billingPeriodEnd": "2026-08-25T00:00:00Z",
+            }
+        },
+    )
+
+    assert status.long_term is not None
+    assert status.long_term.percent_remaining == 75.0
 
 
 def test_parse_remaining_resets_json_response() -> None:

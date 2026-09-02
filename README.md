@@ -71,8 +71,9 @@ Provider mapping:
   window map to `7d` and `monthly` when both are present. When the API returns
   one window, it is assigned to `7d`. Weekly remaining
   prefers the `GrokBuild` entry in `productUsage`, then `creditUsagePercent`.
-  If no percent is reported, `percent_remaining` is `null` while `reset_at`
-  can still be set. Grok JSON output includes `details.product_usage`. When
+  Grok's proto3 billing payload omits a 0% used figure, so a weekly period
+  with no reported percent is treated as 100% remaining. Grok JSON output
+  includes `details.product_usage`. When
   Grok exposes one-time usage resets, `details.resets` lists their expiry
   timestamps.
   The one-time reset RPC is separate from Grok's CLI billing responses. `quse`
