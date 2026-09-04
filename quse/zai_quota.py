@@ -1,12 +1,13 @@
 """Proactive Z.AI quota checking via the Z.AI monitor API."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
 import time
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from quse._opencode_auth import read_auth_token
@@ -18,11 +19,31 @@ _CACHE_TTL_SECONDS = 60
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "goz" / "config.json"
 _DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
 _DEFAULT_TIMEOUT_SECONDS = 120.0
+_RESET_CARDS_PATH = "/api/biz/customer-package-reset/list"
+# Z.AI states all dashboard times in Singapore Standard Time (UTC+8), and the
+# reset-card ``expireTime`` carries no offset. The ZCode app renders the live
+# card as "expires in 27d 7h", which only matches a UTC+8 reading.
+_RESET_CARDS_TZ = timezone(timedelta(hours=8))
+_RESET_CARDS_TARGET = "PERSONAL"
 
 
 def _int_or_none(value: object) -> int | None:
     if isinstance(value, int):
         return value
+    return None
+
+
+def _record_id_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
     return None
 
 
@@ -62,6 +83,69 @@ class ZaiQuotaWindow:
         return max(0.0, 100.0 - self.used_percent)
 
 
+@dataclass(slots=True)
+class ZaiReset:
+    """A one-time Z.AI quota reset card (``fiveHourResets`` / ``weekResets``).
+
+    The internal representation stays provider-flavored (``record_id`` plus a
+    ``scope``); the normalized ``details["banked_resets"]`` list always holds
+    the unified shape so human and JSON output stay consistent across
+    providers.
+    """
+
+    record_id: int | None = None
+    scope: str | None = None
+    expires_at: datetime | None = None
+    available: bool = False
+
+    def __post_init__(self) -> None:
+        self.record_id = _record_id_or_none(self.record_id)
+        if isinstance(self.scope, str):
+            stripped = self.scope.strip()
+            if stripped:
+                self.scope = stripped
+            else:
+                self.scope = None
+        else:
+            self.scope = None
+        self.expires_at = _parse_reset_expire_time(self.expires_at)
+        self.available = bool(self.available)
+
+    @property
+    def is_available(self) -> bool:
+        if not self.available:
+            return False
+        if self.expires_at is None:
+            return True
+        return self.expires_at > datetime.now(timezone.utc)
+
+
+def _parse_reset_expire_time(value: object) -> datetime | None:
+    """Parse a reset-card ``expireTime`` into a canonical UTC ``datetime``.
+
+    The dashboard emits Singapore wall time without an offset
+    (``2026-10-01 23:59:59``), so naive values are read as UTC+8. Anything
+    else falls back to the shared normalizer.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=_RESET_CARDS_TZ).astimezone(timezone.utc)
+        return value.astimezone(timezone.utc)
+    text = value
+    if not isinstance(text, str):
+        return normalize_reset_at(value)
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return normalize_reset_at(value)
+    return parsed.replace(tzinfo=_RESET_CARDS_TZ).astimezone(timezone.utc)
+
+
 @dataclass(slots=True, init=False)
 class ZaiQuotaStatus:
     five_hour: ZaiQuotaWindow = field(default_factory=ZaiQuotaWindow)
@@ -70,6 +154,8 @@ class ZaiQuotaStatus:
     limit_reached: bool = False
     checked_at: float = 0.0
     error: str | None = None
+    resets: list[ZaiReset] = field(default_factory=list)
+    resets_error: str | None = None
 
     def __init__(
         self,
@@ -82,6 +168,8 @@ class ZaiQuotaStatus:
         limit_reached: bool = False,
         checked_at: float = 0.0,
         error: str | None = None,
+        resets: list[ZaiReset] | None = None,
+        resets_error: str | None = None,
     ) -> None:
         self.five_hour = five_hour or api_calls or ZaiQuotaWindow(present=False)
         self.weekly = weekly or tokens or ZaiQuotaWindow(present=False)
@@ -91,6 +179,10 @@ class ZaiQuotaStatus:
         self.limit_reached = limit_reached
         self.checked_at = checked_at
         self.error = error
+        self.resets = []
+        if resets is not None:
+            self.resets = list(resets)
+        self.resets_error = resets_error
 
     @property
     def api_calls(self) -> ZaiQuotaWindow:
@@ -103,6 +195,10 @@ class ZaiQuotaStatus:
     @property
     def max_used_percent(self) -> float:
         return max(self.five_hour.used_percent, self.weekly.used_percent)
+
+    @property
+    def available_resets(self) -> list[ZaiReset]:
+        return [reset for reset in self.resets if reset.is_available]
 
     @property
     def short_term(self) -> UsageWindow:
@@ -238,7 +334,70 @@ def _fetch_usage(*, config_path: Path | None = None) -> ZaiQuotaStatus:
     ) as exc:
         logger.warning("zai quota check failed (fail-open): %s", exc)
         return ZaiQuotaStatus(checked_at=time.monotonic(), error=str(exc))
-    return _parse_usage_response(data)
+    status = _parse_usage_response(data)
+    try:
+        status.resets = _fetch_reset_cards(config)
+    except (
+        FileNotFoundError,
+        ValueError,
+        json.JSONDecodeError,
+        OSError,
+        URLError,
+        TimeoutError,
+    ) as exc:
+        logger.warning("zai reset cards check failed (non-blocking): %s", exc)
+        status.resets_error = str(exc)
+    return status
+
+
+def _fetch_reset_cards(config: ZaiConfig) -> list[ZaiReset]:
+    """Fetch Z.AI quota reset cards (read-only list, never redeems).
+
+    ``GET /api/biz/customer-package-reset/list?targetType=PERSONAL`` returns
+    the ``fiveHourResets`` / ``weekResets`` buckets shown in ZCode's
+    "Resettable quota" panel. Only the personal plan is queried, matching the
+    quota check; team queries need organization/project scope quse does not
+    carry. The ``/use`` endpoint is state-changing and is never called.
+    """
+    query = urlencode({"targetType": _RESET_CARDS_TARGET})
+    url = f"{_monitor_base(config.base_url)}{_RESET_CARDS_PATH}?{query}"
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {config.token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urlopen(request, timeout=config.timeout) as response:
+        body = response.read().decode("utf-8")
+    data = json.loads(body)
+    if isinstance(data, dict):
+        return _parse_reset_cards_response(data)
+    return []
+
+
+def _parse_reset_cards_response(data: dict) -> list[ZaiReset]:
+    """Parse a reset-cards list payload into internal ``ZaiReset`` records."""
+    if isinstance(data.get("data"), dict):
+        data = data["data"]
+    parsed: list[ZaiReset] = []
+    for key, scope in (("fiveHourResets", "five_hour"), ("weekResets", "week")):
+        items = data.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            reset = ZaiReset(
+                record_id=item.get("recordId"),
+                scope=scope,
+                expires_at=item.get("expireTime"),
+                available=item.get("available"),
+            )
+            if reset.record_id is None:
+                continue
+            parsed.append(reset)
+    return parsed
 
 
 def check_zai_quota(

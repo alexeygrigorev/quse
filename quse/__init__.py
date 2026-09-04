@@ -46,7 +46,7 @@ from quse.usage import (
     usage_provider_for,
     usage_window_record,
 )
-from quse.zai_quota import ZaiQuotaStatus, ZaiQuotaWindow, check_zai_quota
+from quse.zai_quota import ZaiQuotaStatus, ZaiQuotaWindow, ZaiReset, check_zai_quota
 
 __all__ = [
     "BankedReset",
@@ -77,6 +77,7 @@ __all__ = [
     "UsageWindow",
     "ZaiQuotaStatus",
     "ZaiQuotaWindow",
+    "ZaiReset",
     "ZaiUsageProvider",
     "check_claude_quota",
     "check_codex_quota",

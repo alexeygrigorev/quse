@@ -290,10 +290,12 @@ def test_codex_json_round_trips_real_payload(monkeypatch):
         "percent_remaining": None,
         "reset_at": None,
     }
-    assert record["details"]["reset_credits_available"] == 2
-    assert record["details"]["reset_credits"][0]["expires_at"] == (
-        "2026-07-26T23:52:15Z"
-     )
+    assert record["details"]["banked_resets_available"] == 2
+    assert record["details"]["banked_resets"][0] == {
+        "available": True,
+        "expires_at": "2026-07-26T23:52:15Z",
+        "label": "Full reset (Weekly + 5 hr)",
+    }
 
 
 def test_codex_human_round_trips_real_payload(monkeypatch):
@@ -317,7 +319,7 @@ def test_codex_human_round_trips_real_payload(monkeypatch):
         "7d:\n"
         "    remaining: 2.0%\n"
         "    reset: 11-07-2026 06:23 (UTC) / in 3d 18h\n"
-        "reset_credits:\n"
+        "banked_resets:\n"
         "    expires: 26-07-2026 23:52 (UTC) / in 19d 11h\n"
         "    expires: 31-07-2026 19:09 (UTC) / in 24d 7h"
     )
@@ -644,6 +646,127 @@ def test_grok_normalized_record_has_datetime_reset_at():
     _assert_reset_at_is_datetime(record["windows"]["7d"]["reset_at"])
     _assert_reset_at_is_datetime(record["windows"]["monthly"]["reset_at"])
     format_usage_line(record)
+
+
+# ---------------------------------------------------------------------------
+# Z.AI reset cards (banked resets)
+# ---------------------------------------------------------------------------
+
+# Shape captured 2026-09-04 from
+# api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL
+# (recordId redacted, expiry kept: dashboard wall time without an offset).
+
+ZAI_RESET_CARDS_PAYLOAD = {
+    "code": 200,
+    "msg": "Operation successful",
+    "data": {
+        "targetType": "PERSONAL",
+        "lastFiveHourResetTime": None,
+        "lastWeekResetTime": None,
+        "fiveHourResets": [],
+        "weekResets": [
+            {
+                "recordId": 294120,
+                "expireTime": "2026-10-01 23:59:59",
+                "available": True,
+            }
+        ],
+    },
+    "success": True,
+}
+
+
+def test_zai_parse_reset_cards_payload():
+    from quse.zai_quota import _parse_reset_cards_response
+
+    resets = _parse_reset_cards_response(ZAI_RESET_CARDS_PAYLOAD)
+
+    assert len(resets) == 1
+    assert resets[0].record_id == 294120
+    assert resets[0].scope == "week"
+    _assert_reset_at_is_datetime(resets[0].expires_at)
+    # Dashboard wall time is Singapore (UTC+8), not UTC.
+    assert reset_at_to_iso(resets[0].expires_at) == "2026-10-01T15:59:59Z"
+    assert resets[0].is_available is True
+    assert len([reset for reset in resets if reset.is_available]) == 1
+
+
+def test_zai_parse_reset_cards_marks_expired_unavailable():
+    from quse.zai_quota import ZaiReset
+
+    reset = ZaiReset(
+        record_id=1, scope="five_hour", expires_at="2020-01-01 00:00:00"
+    )
+
+    assert reset_at_to_iso(reset.expires_at) == "2019-12-31T16:00:00Z"
+    assert reset.is_available is False
+
+
+def test_zai_json_round_trips_reset_cards(monkeypatch):
+    from quse.zai_quota import _parse_reset_cards_response, _parse_usage_response
+
+    status = _parse_usage_response(ZAI_PAYLOAD)
+    status.resets = _parse_reset_cards_response(ZAI_RESET_CARDS_PAYLOAD)
+    monkeypatch.setattr("quse.usage.check_zai_quota", lambda: status)
+
+    output = CliRunner().invoke(app, ["zai", "--json"]).output
+    record = json.loads(output)["zai"]
+
+    assert record["details"]["banked_resets_available"] == 1
+    assert record["details"]["banked_resets"] == [
+        {
+            "available": True,
+            "expires_at": "2026-10-01T15:59:59Z",
+            "label": "weekly reset",
+        }
+    ]
+    assert record["details"]["banked_resets_error"] is None
+
+
+def test_zai_human_round_trips_reset_cards(monkeypatch):
+    _set_utc_tz(monkeypatch)
+    from quse.zai_quota import _parse_reset_cards_response, _parse_usage_response
+
+    status = _parse_usage_response(ZAI_PAYLOAD)
+    status.resets = _parse_reset_cards_response(ZAI_RESET_CARDS_PAYLOAD)
+    monkeypatch.setattr("quse.usage.check_zai_quota", lambda: status)
+    _freeze_clock(monkeypatch, datetime(2026, 9, 4, 12, 0, 0, tzinfo=timezone.utc))
+
+    output = CliRunner().invoke(app, ["zai"]).output
+
+    assert output.strip() == (
+        "5h:\n"
+        "    remaining: 53.0%\n"
+        "    reset: rolling 5h\n"
+        "7d:\n"
+        "    remaining: 55.0%\n"
+        "    reset: 11-07-2026 14:04 (UTC) / overdue\n"
+        "banked_resets:\n"
+        "    expires: 01-10-2026 15:59 (UTC) / in 27d 3h"
+    )
+
+
+def test_zai_reset_cards_failure_is_non_blocking(monkeypatch):
+    import quse.zai_quota as zai_quota
+    from quse.zai_quota import ZaiConfig
+
+    monkeypatch.setattr(
+        zai_quota, "_read_zai_config", lambda config_path=None: ZaiConfig(token="tok")
+    )
+    monkeypatch.setattr(
+        zai_quota, "_fetch_quota_limit", lambda config: {"data": {"limits": []}}
+    )
+
+    def fail_reset_cards(config):
+        raise OSError("reset cards unavailable")
+
+    monkeypatch.setattr(zai_quota, "_fetch_reset_cards", fail_reset_cards)
+
+    status = zai_quota._fetch_usage()
+
+    assert status.error is None
+    assert status.resets == []
+    assert status.resets_error == "reset cards unavailable"
 
 
 def test_format_relative_days_and_hours():

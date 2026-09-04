@@ -58,7 +58,7 @@ def test_usage_single_provider_json(monkeypatch):
     assert result.stdout.startswith("{\n  ")
 
 
-def test_codex_json_includes_reset_credits(monkeypatch):
+def test_codex_json_includes_banked_resets(monkeypatch):
     monkeypatch.setattr(
         "quse.usage.check_codex_quota",
         lambda: CodexQuotaStatus(
@@ -76,17 +76,17 @@ def test_codex_json_includes_reset_credits(monkeypatch):
 
     assert result.exit_code == 0
     details = json.loads(result.stdout)["codex"]["details"]
-    assert details["reset_credits_available"] == 1
-    assert details["reset_credits"] == [
+    assert details["banked_resets_available"] == 1
+    assert details["banked_resets"] == [
         {
-            "status": "available",
-            "title": "Full reset (Weekly + 5 hr)",
+            "available": True,
             "expires_at": "2026-05-24T15:53:01Z",
+            "label": "Full reset (Weekly + 5 hr)",
         }
     ]
 
 
-def test_codex_human_usage_shows_reset_credits(monkeypatch):
+def test_codex_human_usage_shows_banked_resets(monkeypatch):
     original_tz = os.environ.get("TZ")
     monkeypatch.setenv("TZ", "UTC")
     if hasattr(time, "tzset"):
@@ -109,7 +109,7 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
 
         assert result.exit_code == 0
         assert (
-            "reset_credits:\n    expires: 24-05-2026 15:53 (UTC) / overdue"
+            "banked_resets:\n    expires: 24-05-2026 15:53 (UTC) / overdue"
         ) in result.stdout
     finally:
         if original_tz is None:
@@ -120,14 +120,14 @@ def test_codex_human_usage_shows_reset_credits(monkeypatch):
             time.tzset()
 
 
-def test_grok_json_includes_resets(monkeypatch):
+def test_grok_json_includes_banked_resets(monkeypatch):
     monkeypatch.setattr(
         "quse.usage.check_grok_quota",
         lambda: GrokQuotaStatus(
             resets=[
                 GrokReset(
                     token_id="reset-1",
-                    expires_at="2026-09-01T00:00:00Z",
+                    expires_at="2027-09-01T00:00:00Z",
                 )
             ],
         ),
@@ -137,16 +137,17 @@ def test_grok_json_includes_resets(monkeypatch):
 
     assert result.exit_code == 0
     details = json.loads(result.stdout)["grok"]["details"]
-    assert details["resets_available"] == 1
-    assert details["resets"] == [
+    assert details["banked_resets_available"] == 1
+    assert details["banked_resets"] == [
         {
-            "expires_at": "2026-09-01T00:00:00Z",
-            "token_id": "reset-1",
+            "available": True,
+            "expires_at": "2027-09-01T00:00:00Z",
+            "label": "reset-1",
         }
     ]
 
 
-def test_grok_human_usage_shows_resets(monkeypatch):
+def test_grok_human_usage_shows_banked_resets(monkeypatch):
     original_tz = os.environ.get("TZ")
     monkeypatch.setenv("TZ", "UTC")
     if hasattr(time, "tzset"):
@@ -167,7 +168,9 @@ def test_grok_human_usage_shows_resets(monkeypatch):
         result = CliRunner().invoke(app, ["grok"])
 
         assert result.exit_code == 0
-        assert "resets:\n    expires: 24-05-2026 15:53 (UTC) / overdue" in result.stdout
+        assert (
+            "banked_resets:\n    expires: 24-05-2026 15:53 (UTC) / overdue"
+        ) in result.stdout
     finally:
         if original_tz is None:
             monkeypatch.delenv("TZ", raising=False)

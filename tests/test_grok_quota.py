@@ -236,13 +236,13 @@ def test_parse_remaining_resets_json_response() -> None:
             "tokens": [
                 {
                     "tokenId": "reset-1",
-                    "validityEnd": "2026-09-01T00:00:00Z",
+                    "validityEnd": "2027-09-01T00:00:00Z",
                 },
                 {
                     "token_id": "reset-2",
                     "validity_end": {"seconds": 1798848000},
                 },
-                {"tokenId": "reset-1", "validityEnd": "2026-09-01T00:00:00Z"},
+                {"tokenId": "reset-1", "validityEnd": "2027-09-01T00:00:00Z"},
                 "ignored",
             ]
         }
@@ -250,7 +250,7 @@ def test_parse_remaining_resets_json_response() -> None:
 
     assert len(resets) == 2
     assert [reset.token_id for reset in resets] == ["reset-1", "reset-2"]
-    assert reset_at_to_iso(resets[0].expires_at) == "2026-09-01T00:00:00Z"
+    assert reset_at_to_iso(resets[0].expires_at) == "2027-09-01T00:00:00Z"
     assert reset_at_to_iso(resets[1].expires_at) == "2027-01-02T00:00:00Z"
     assert all(reset.is_available for reset in resets)
 
@@ -323,7 +323,7 @@ def test_fetch_quota_fetches_remaining_resets(monkeypatch) -> None:
                 "tokens": [
                     {
                         "tokenId": "reset-1",
-                        "validityEnd": "2026-09-01T00:00:00Z",
+                        "validityEnd": "2027-09-01T00:00:00Z",
                     }
                 ]
             }

@@ -148,6 +148,29 @@ def _banked_resets_from_grok(status_obj: Any) -> list[dict[str, Any]]:
     return banked
 
 
+_ZAI_BANKED_SCOPE_LABELS = {
+    "five_hour": "5-hour reset",
+    "week": "weekly reset",
+}
+
+
+def _banked_resets_from_zai(status_obj: Any) -> list[dict[str, Any]]:
+    banked: list[dict[str, Any]] = []
+    for reset in getattr(status_obj, "resets", []):
+        scope = getattr(reset, "scope", None)
+        label = _ZAI_BANKED_SCOPE_LABELS.get(scope)
+        if label is None:
+            label = scope
+        banked.append(
+            _banked_reset_record(
+                expires_at=getattr(reset, "expires_at", None),
+                available=bool(getattr(reset, "is_available", False)),
+                label=label,
+            )
+        )
+    return banked
+
+
 def _format_banked_resets_lines(
     record: dict[str, Any], *, header: bool = True, now: datetime | None = None
 ) -> list[str]:
@@ -366,6 +389,9 @@ class ZaiUsageProvider(UsageProvider):
         return {
             "limit_reached": status_obj.limit_reached,
             "max_used_percent": status_obj.max_used_percent,
+            "banked_resets": _banked_resets_from_zai(status_obj),
+            "banked_resets_available": len(status_obj.available_resets),
+            "banked_resets_error": status_obj.resets_error,
             "windows": {
                 "five_hour": asdict(status_obj.five_hour),
                 "weekly": asdict(status_obj.weekly),
