@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, TypeAlias
 
-from quse._shared import UsageWindow
+from quse._shared import BankedReset, UsageWindow
 from quse.claude_quota import check_claude_quota
 from quse.codex_quota import check_codex_quota
 from quse.copilot_quota import check_copilot_quota
@@ -109,48 +109,61 @@ def _format_percent(value: float | int | None) -> str:
     return f"{value}%"
 
 
-def _format_codex_reset_credit_lines(
+def _banked_reset_record(
+    *, expires_at: Any, available: bool, label: Any
+) -> dict[str, Any]:
+    """Build one unified ``banked_resets`` entry.
+
+    Every provider maps its internal reset representation onto this single
+    shape so human and JSON output share the same model.
+    """
+    return asdict(
+        BankedReset(expires_at=expires_at, available=available, label=label)
+    )
+
+
+def _banked_resets_from_codex(status_obj: Any) -> list[dict[str, Any]]:
+    banked: list[dict[str, Any]] = []
+    for credit in getattr(status_obj, "reset_credits", []):
+        banked.append(
+            _banked_reset_record(
+                expires_at=getattr(credit, "expires_at", None),
+                available=bool(getattr(credit, "is_available", False)),
+                label=getattr(credit, "title", None),
+            )
+        )
+    return banked
+
+
+def _banked_resets_from_grok(status_obj: Any) -> list[dict[str, Any]]:
+    banked: list[dict[str, Any]] = []
+    for reset in getattr(status_obj, "resets", []):
+        banked.append(
+            _banked_reset_record(
+                expires_at=getattr(reset, "expires_at", None),
+                available=bool(getattr(reset, "is_available", False)),
+                label=getattr(reset, "token_id", None),
+            )
+        )
+    return banked
+
+
+def _format_banked_resets_lines(
     record: dict[str, Any], *, header: bool = True, now: datetime | None = None
 ) -> list[str]:
-    if record["provider"] != "codex":
-        return []
     details = record.get("details")
     if not isinstance(details, dict):
         return []
-    credits = details.get("reset_credits")
-    if not isinstance(credits, list) or not credits:
+    banked = details.get("banked_resets")
+    if not isinstance(banked, list) or not banked:
         return []
     indent, field_indent = _usage_indents(header)
-    return [
-        f"{indent}reset_credits:",
-        *[
-            f"{field_indent}{_format_codex_reset_credit_body(credit, now=now)}"
-            for credit in credits
-            if isinstance(credit, dict)
-        ],
-    ]
-
-
-def _format_grok_reset_lines(
-    record: dict[str, Any], *, header: bool = True, now: datetime | None = None
-) -> list[str]:
-    if record["provider"] != "grok":
-        return []
-    details = record.get("details")
-    if not isinstance(details, dict):
-        return []
-    resets = details.get("resets")
-    if not isinstance(resets, list) or not resets:
-        return []
-    indent, field_indent = _usage_indents(header)
-    return [
-        f"{indent}resets:",
-        *[
-            f"{field_indent}{_format_grok_reset_body(reset, now=now)}"
-            for reset in resets
-            if isinstance(reset, dict)
-        ],
-    ]
+    lines: list[str] = [f"{indent}banked_resets:"]
+    for item in banked:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"{field_indent}{_format_banked_reset_body(item, now=now)}")
+    return lines
 
 
 def _usage_indents(header: bool) -> tuple[str, str]:
@@ -159,26 +172,12 @@ def _usage_indents(header: bool) -> tuple[str, str]:
     return "", "    "
 
 
-def _format_codex_reset_credit_body(
-    credit: dict[str, Any], *, now: datetime | None = None
+def _format_banked_reset_body(
+    item: dict[str, Any], *, now: datetime | None = None
 ) -> str:
-    expires_at = credit.get("expires_at")
-    formatted = _format_reset_at(expires_at)
-    if formatted == "unknown":
-        return "expires: unknown"
-    if now is not None:
-        current = now
-    else:
-        current = datetime.now(tz=expires_at.tzinfo)
-    return f"expires: {formatted} / {_format_relative(expires_at, current)}"
-
-
-def _format_grok_reset_body(
-    reset: dict[str, Any], *, now: datetime | None = None
-) -> str:
-    expires_at = reset.get("expires_at")
+    expires_at = item.get("expires_at")
     if expires_at is None:
-        expires_at = reset.get("validity_end")
+        expires_at = item.get("validity_end")
     formatted = _format_reset_at(expires_at)
     if formatted == "unknown":
         return "expires: unknown"
@@ -292,9 +291,9 @@ class CodexUsageProvider(UsageProvider):
     def details(self, status_obj: Any) -> dict[str, Any]:
         return {
             "limit_reached": status_obj.limit_reached,
-            "reset_credits": [asdict(credit) for credit in status_obj.reset_credits],
-            "reset_credits_available": len(status_obj.available_reset_credits),
-            "reset_credits_error": status_obj.reset_credits_error,
+            "banked_resets": _banked_resets_from_codex(status_obj),
+            "banked_resets_available": len(status_obj.available_reset_credits),
+            "banked_resets_error": status_obj.reset_credits_error,
             "windows": {
                 "primary_window": asdict(status_obj.primary_window),
                 "secondary_window": asdict(status_obj.secondary_window),
@@ -396,9 +395,9 @@ class GrokUsageProvider(UsageProvider):
             "on_demand_cap": status_obj.on_demand_cap,
             "on_demand_used": status_obj.on_demand_used,
             "product_usage": status_obj.product_usage,
-            "resets": [asdict(reset) for reset in status_obj.resets],
-            "resets_available": len(status_obj.available_resets),
-            "resets_error": status_obj.resets_error,
+            "banked_resets": _banked_resets_from_grok(status_obj),
+            "banked_resets_available": len(status_obj.available_resets),
+            "banked_resets_error": status_obj.resets_error,
             "windows": {
                 "weekly": asdict(status_obj.weekly),
                 "monthly": asdict(status_obj.monthly),
@@ -499,8 +498,7 @@ def format_usage_line(
                 f"{field_indent}reset: {_format_reset_or_window(term, window, now=now)}",
             ]
         )
-    lines.extend(_format_codex_reset_credit_lines(record, header=header, now=now))
-    lines.extend(_format_grok_reset_lines(record, header=header, now=now))
+    lines.extend(_format_banked_resets_lines(record, header=header, now=now))
     if record["error"]:
         lines.append(f"{indent}error: {record['error']}")
     return "\n".join(lines)

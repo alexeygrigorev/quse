@@ -59,7 +59,7 @@ Provider mapping:
   window as rolling, it is `false`.
 - `codex`: API windows map to `5h` and `7d`; when the API returns one window,
   it is `7d` only.
-  Codex JSON output also includes `details.reset_credits` from ChatGPT's
+  Codex JSON output also includes `details.banked_resets` from ChatGPT's
   rate-limit reset-credit endpoint when available.
 - `claude`: the API's short and long signals map to `5h` and `7d`.
 - `copilot`: the monthly premium-interactions signal maps to `monthly`.
@@ -74,8 +74,9 @@ Provider mapping:
   Grok's proto3 billing payload omits a 0% used figure, so a weekly period
   with no reported percent is treated as 100% remaining. Grok JSON output
   includes `details.product_usage`. When
-  Grok exposes one-time usage resets, `details.resets` lists their expiry
-  timestamps.
+  Codex or Grok expose one-time usage resets, `details.banked_resets` lists
+  them with one unified shape (`expires_at`, `available`, `label`) for both
+  providers and both human and JSON output render them as `banked_resets`.
   The one-time reset RPC is separate from Grok's CLI billing responses. `quse`
   queries it with the stored OAuth token and uses the local `curl` command for
   the `grok.com` request because Cloudflare can challenge Python's TLS client.

@@ -32,6 +32,37 @@ class UsageWindow:
 
 
 @dataclass(slots=True)
+class BankedReset:
+    """Unified one-time banked reset shared by every provider.
+
+    Providers keep their own internal representation (Codex reset credits,
+    Grok resets), but the normalized ``details["banked_resets"]`` list always
+    holds this shape so human and JSON output stay consistent:
+
+    - ``expires_at``: canonical UTC ``datetime`` (or ``None``), serialized to
+      ISO-8601 UTC at the JSON boundary via [reset_at_to_iso].
+    - ``available``: whether this reset is still redeemable.
+    - ``label``: provider-specific identifier (Codex title, Grok token id).
+    """
+
+    expires_at: datetime | None = None
+    available: bool = False
+    label: str | None = None
+
+    def __post_init__(self) -> None:
+        self.expires_at = normalize_reset_at(self.expires_at)
+        if isinstance(self.label, str):
+            stripped = self.label.strip()
+            if stripped:
+                self.label = stripped
+            else:
+                self.label = None
+        else:
+            self.label = None
+        self.available = bool(self.available)
+
+
+@dataclass(slots=True)
 class UsageStatus:
     limit_reached: bool = False
     short_term: UsageWindow = field(default_factory=UsageWindow)

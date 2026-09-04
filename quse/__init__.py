@@ -1,6 +1,6 @@
 """Quota helpers for engine adapters."""
 
-from quse._shared import UsageStatus, UsageWindow, normalize_reset_at
+from quse._shared import BankedReset, UsageStatus, UsageWindow, normalize_reset_at
 from quse.claude_quota import (
     ClaudeQuotaStatus,
     ClaudeQuotaWindow,
@@ -49,6 +49,7 @@ from quse.usage import (
 from quse.zai_quota import ZaiQuotaStatus, ZaiQuotaWindow, check_zai_quota
 
 __all__ = [
+    "BankedReset",
     "ClaudeQuotaStatus",
     "ClaudeQuotaWindow",
     "ClaudeUsageProvider",
