@@ -1385,9 +1385,16 @@ def _fetch_resets(
                 # payload during a backend migration. Keep trying the other
                 # service name before deciding that the account has no reset.
                 got_empty_response = True
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    # Grok removes or does not expose this optional RPC for
+                    # some accounts. A missing reset endpoint is equivalent
+                    # to having no banked resets; quota usage is independent.
+                    continue
+                last_error = exc
+                logger.warning("grok reset list check failed for %s: %s", url, exc)
             except (
                 urllib.error.URLError,
-                urllib.error.HTTPError,
                 OSError,
                 TimeoutError,
                 RuntimeError,

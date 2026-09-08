@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import time
+import urllib.error
 
 from quse import grok_quota
 from quse._shared import UsageStatus, reset_at_to_iso
@@ -372,6 +373,26 @@ def test_fetch_resets_tries_second_rpc_after_empty_response(monkeypatch) -> None
     )
 
     assert [reset.token_id for reset in resets] == ["reset-2"]
+    assert requested_urls == [
+        "https://example.test/prod_mc_billing.ConsumerUiSvc/GetRemainingResets",
+        "https://example.test/grok_api_v2.ConsumerUiSvc/GetRemainingResets",
+    ]
+
+
+def test_fetch_resets_treats_missing_rpc_as_no_resets(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    def fake_fetch_grpc(url, token, *, timeout, cookie, user_agent):
+        requested_urls.append(url)
+        raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+
+    monkeypatch.setattr(grok_quota, "_fetch_grpc", fake_fetch_grpc)
+
+    resets = grok_quota._fetch_resets(
+        "tok", base_url="https://example.test", cookie="sso=browser-session"
+    )
+
+    assert resets == []
     assert requested_urls == [
         "https://example.test/prod_mc_billing.ConsumerUiSvc/GetRemainingResets",
         "https://example.test/grok_api_v2.ConsumerUiSvc/GetRemainingResets",
