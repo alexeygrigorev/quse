@@ -289,8 +289,10 @@ def _parse_usage_response(data: dict) -> ZaiQuotaStatus:
         limit_type = limit.get("type")
         unit = window.window_hours
         if limit_type == "TOKENS_LIMIT" and unit == 3:
+            # This is z.ai's rolling five-hour allowance. Current responses
+            # include the end of the active window in ``nextResetTime``;
+            # preserve it so consumers can show the concrete reset time.
             window.window_hours = 5
-            window.reset_at = None
             five_hour = window
             five_hour.present = True
             found_five_hour = True

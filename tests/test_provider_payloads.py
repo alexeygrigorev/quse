@@ -453,8 +453,7 @@ def test_zai_parse_real_payload():
     _assert_reset_at_is_datetime(status.weekly.reset_at)
     _assert_reset_at_is_datetime(status.monthly_web_search.reset_at)
 
-    # five_hour window reset is cleared by the parser (unit==3 -> rolling 5h).
-    assert status.five_hour.reset_at is None
+    assert reset_at_to_iso(status.five_hour.reset_at) == "2026-07-07T22:22:10Z"
     assert reset_at_to_iso(status.weekly.reset_at) == "2026-07-11T14:04:58Z"
     assert status.short_term.percent_remaining == 53.0
     assert status.long_term.percent_remaining == 55.0
@@ -471,7 +470,7 @@ def test_zai_json_round_trips_real_payload(monkeypatch):
 
     assert record["windows"]["5h"] == {
         "percent_remaining": 53.0,
-        "reset_at": None,
+        "reset_at": "2026-07-07T22:22:10Z",
         "rolling": True,
     }
     assert record["windows"]["7d"] == {
@@ -499,7 +498,7 @@ def test_zai_human_round_trips_real_payload(monkeypatch):
     assert output.strip() == (
         "5h:\n"
         "    remaining: 53.0%\n"
-        "    reset: rolling 5h\n"
+        "    reset: 07-07-2026 22:22 (UTC) / in 10h\n"
         "7d:\n"
         "    remaining: 55.0%\n"
         "    reset: 11-07-2026 14:04 (UTC) / in 4d 2h"
@@ -737,7 +736,7 @@ def test_zai_human_round_trips_reset_cards(monkeypatch):
     assert output.strip() == (
         "5h:\n"
         "    remaining: 53.0%\n"
-        "    reset: rolling 5h\n"
+        "    reset: 07-07-2026 22:22 (UTC) / overdue\n"
         "7d:\n"
         "    remaining: 55.0%\n"
         "    reset: 11-07-2026 14:04 (UTC) / overdue\n"
